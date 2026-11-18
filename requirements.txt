@@ -3,9 +3,10 @@
 # Python: 3.12+
 # Install: python -m pip install -r requirements.txt
 #
+# Runtime dependencies only (these go into the Docker image).
+# Dev/test tools (pytest, ruff, mypy, httpx) live in requirements-dev.txt.
+#
 # Versions are pinned with '==' for reproducible installs across environments.
-# Keep runtime and development groups separated when this grows into a
-# pyproject.toml-based project.
 # ==============================================================================
 
 # --- Framework / ASGI server --------------------------------------------------
@@ -16,7 +17,7 @@ pydantic-settings==2.16.3        # typed settings loaded from the environment
 python-dotenv==1.2.4             # .env file support for local development
 
 # --- Persistence / migrations -------------------------------------------------
-sqlalchemy==2.1.9                # ORM / database toolkit
+sqlalchemy[asyncio]==2.1.9                # ORM / database toolkit
 asyncpg==0.32.0                  # async driver for postgresql+asyncpg:// URLs
 alembic==1.20.1                  # database schema migrations
 
@@ -25,12 +26,3 @@ redis==8.1.0                     # Redis client for REDIS_URL (cache, workers)
 
 # --- Security -----------------------------------------------------------------
 pyjwt==2.15.1                    # JWT encode/decode for JWT_SECRET-based auth
-
-# --- Testing ------------------------------------------------------------------
-pytest==9.2.0                    # test runner
-pytest-asyncio==1.5.0            # async test support
-httpx==0.28.1                    # FastAPI TestClient transport / outbound checks
-
-# --- Code quality / type checking ---------------------------------------------
-ruff==0.17.5                     # linting and formatting
-mypy==2.4.1                      # static type checking
