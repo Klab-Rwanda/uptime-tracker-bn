@@ -17,7 +17,14 @@ python-dotenv==1.2.4             # .env file support for local development
 
 # --- Persistence / migrations -------------------------------------------------
 sqlalchemy==2.1.9                # ORM / database toolkit
+asyncpg==0.32.0                  # async driver for postgresql+asyncpg:// URLs
 alembic==1.20.1                  # database schema migrations
+
+# --- Caching / queues ---------------------------------------------------------
+redis==8.1.0                     # Redis client for REDIS_URL (cache, workers)
+
+# --- Security -----------------------------------------------------------------
+pyjwt==2.15.1                    # JWT encode/decode for JWT_SECRET-based auth
 
 # --- Testing ------------------------------------------------------------------
 pytest==9.2.0                    # test runner
