@@ -16,7 +16,7 @@ pydantic-settings==2.16.3        # typed settings loaded from the environment
 python-dotenv==1.2.4             # .env file support for local development
 
 # --- Persistence / migrations -------------------------------------------------
-sqlalchemy==2.1.9                # ORM / database toolkit
+sqlalchemy[asyncio]==2.1.9        # ORM / database toolkit with async engine support
 asyncpg==0.32.0                  # async driver for postgresql+asyncpg:// URLs
 alembic==1.20.1                  # database schema migrations
 
@@ -25,11 +25,14 @@ redis==8.1.0                     # Redis client for REDIS_URL (cache, workers)
 
 # --- Security -----------------------------------------------------------------
 pyjwt==2.15.1                    # JWT encode/decode for JWT_SECRET-based auth
+argon2-cffi==25.1.0              # Argon2id password hashing
+email-validator==2.3.0           # Pydantic email validation
 
 # --- Testing ------------------------------------------------------------------
 pytest==9.2.0                    # test runner
 pytest-asyncio==1.5.0            # async test support
 httpx==0.28.1                    # FastAPI TestClient transport / outbound checks
+aiosqlite==0.21.0                # isolated async database tests
 
 # --- Code quality / type checking ---------------------------------------------
 ruff==0.17.5                     # linting and formatting

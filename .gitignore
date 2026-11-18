@@ -18,3 +18,7 @@ htmlcov/
 # Build output
 build/
 dist/
+node_modules/
+
+# Planning document kept outside the source repository
+/platform-monitoring-api-contract-and-mvp-plan.pdf
