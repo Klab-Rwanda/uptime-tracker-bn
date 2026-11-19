@@ -33,4 +33,7 @@ httpx==0.28.1                    # FastAPI TestClient transport / outbound check
 
 # --- Code quality / type checking ---------------------------------------------
 ruff==0.17.5                     # linting and formatting
-mypy==2.4.1                      # static type checking
+mypy==2.4.1     
+
+
+                 # static type checking
