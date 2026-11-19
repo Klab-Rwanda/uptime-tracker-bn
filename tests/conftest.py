@@ -7,7 +7,7 @@ from app.main import app
 @pytest.fixture
 async def client():
     """Calls the FastAPI app directly, with no network."""
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
 
