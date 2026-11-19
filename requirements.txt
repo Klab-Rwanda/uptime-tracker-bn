@@ -26,3 +26,6 @@ redis==8.1.0                     # Redis client for REDIS_URL (cache, workers)
 
 # --- Security -----------------------------------------------------------------
 pyjwt==2.15.1                    # JWT encode/decode for JWT_SECRET-based auth
+
+# --- Observability ------------------------------------------------------------
+prometheus-client==0.24.1        # Prometheus metrics for /metrics
