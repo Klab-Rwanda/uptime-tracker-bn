@@ -1,25 +1,23 @@
-# from fastapi import FastAPI
-
-# app = FastAPI(title="UpTimeTracker API", version="0.1.0")
-
-
-# @app.get("/health/live")
-# async def health_live() -> dict[str, str]:
-#     return {"status": "ok"}
-
-
-# @app.get("/health/ready")
-# async def health_ready() -> dict[str, str]:
-#     return {"status": "ok"}
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from app.util.config import settings
-app = FastAPI(title=settings.app_name, debug=settings.app_debug)
 
-@app.get("/health")
-async def health_check():
-    return {
-        "status":"ok",
-        "app_env":settings.app_env,
-        "database_configured":bool(settings.database_url),
-        }
+from app.routes import health
+from app.util.database import dispose_engine
+from app.util.errors import register_error_handlers
+from app.util.logs import register_logging
+from app.util.redis import close_redis
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await dispose_engine()
+    await close_redis()
+
+
+app = FastAPI(title="UpTimeTracker API", version="0.1.0", lifespan=lifespan)
+register_logging(app)
+register_error_handlers(app)
+
+app.include_router(health.router)

@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     app_name: str = "pulseMonitor"
     app_env: str = "development"
     app_debug: bool = False
+    log_level: str = "INFO"
 
     database_url: str
     direct_database_url: str | None = None
