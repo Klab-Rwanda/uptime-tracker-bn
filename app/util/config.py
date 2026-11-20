@@ -11,13 +11,21 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    app_name: str = "UpTimeTracker"
+    app_env: str = "development"
+    app_debug: bool = False
+    log_level: str = "INFO"
+
     database_url: str
-    redis_url: str
+    direct_database_url: str | None = None
+    redis_url: str = "redis://redis:6379/0"
+
     jwt_secret: SecretStr
     jwt_issuer: str = "uptimetracker-api"
     jwt_audience: str = "uptimetracker-client"
     access_token_ttl_seconds: int = 900
     refresh_token_ttl_days: int = 30
+
     brevo_smtp_host: str = "smtp-relay.brevo.com"
     brevo_smtp_port: int = 587
     brevo_smtp_login: str = ""
@@ -25,6 +33,9 @@ class Settings(BaseSettings):
     brevo_sender_email: str = ""
     brevo_sender_name: str = ""
     email_code_ttl_minutes: int = 10
+
+    sentry_dsn: str | None = None
+    sentry_environment: str = "development"
 
     @field_validator("jwt_secret")
     @classmethod
@@ -38,3 +49,6 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()  # type: ignore[call-arg]  # Values are loaded from environment.
+
+
+settings = get_settings()
