@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -47,7 +48,7 @@ def error_response(
     code: str,
     message: str,
     details: list[dict[str, Any]] | None = None,
-    headers: dict[str, str] | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> JSONResponse:
     body: dict[str, Any] = {"code": code, "message": message}
     if details is not None:
@@ -55,13 +56,15 @@ def error_response(
     return JSONResponse(status_code=status_code, content={"error": body}, headers=headers)
 
 
-async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
+async def app_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, AppError)
     return error_response(exc.status_code, exc.code, exc.message, exc.details)
 
 
 async def validation_error_handler(
-    request: Request, exc: RequestValidationError
+    request: Request, exc: Exception
 ) -> JSONResponse:
+    assert isinstance(exc, RequestValidationError)
     details = []
     for err in exc.errors():
         loc = [str(part) for part in err["loc"]]
@@ -73,8 +76,9 @@ async def validation_error_handler(
 
 
 async def http_error_handler(
-    request: Request, exc: StarletteHTTPException
+    request: Request, exc: Exception
 ) -> JSONResponse:
+    assert isinstance(exc, StarletteHTTPException)
     code = ERROR_CODES.get(exc.status_code, "error")
     message = exc.detail if isinstance(exc.detail, str) else "Request failed"
     return error_response(exc.status_code, code, message, headers=exc.headers)

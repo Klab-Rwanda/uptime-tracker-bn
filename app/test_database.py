@@ -2,7 +2,7 @@ import asyncio
 
 from sqlalchemy import text
 
-from app.utils.database import engine
+from app.util.database import engine
 
 
 async def check_database():
@@ -14,4 +14,5 @@ async def check_database():
         print(database_version)
 
 
-asyncio.run(check_database())
+if __name__ == "__main__":
+    asyncio.run(check_database())
