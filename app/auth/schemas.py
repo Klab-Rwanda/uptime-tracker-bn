@@ -39,6 +39,23 @@ class RefreshRequest(BaseModel):
     refresh_token: str = Field(min_length=32, max_length=512)
 
 
+class EmailRequest(BaseModel):
+    email: EmailStr = Field(max_length=255)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: EmailStr) -> str:
+        return str(value).strip().lower()
+
+
+class VerifyEmailRequest(EmailRequest):
+    code: str = Field(pattern=r"^\d{6}$")
+
+
+class ResetPasswordRequest(VerifyEmailRequest):
+    new_password: str = Field(min_length=12, max_length=128)
+
+
 class UserResponse(BaseModel):
     id: UUID
     email: EmailStr
@@ -55,3 +72,7 @@ class TokenData(BaseModel):
 
 class TokenResponse(BaseModel):
     data: TokenData
+
+
+class EmailActionResponse(BaseModel):
+    data: dict[str, str]

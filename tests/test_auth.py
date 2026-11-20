@@ -13,6 +13,7 @@ from app.util.database import Base, get_db_session
 from app.util.redis import get_redis_client
 
 pytestmark = pytest.mark.asyncio
+sent_emails: list[tuple[str, str, dict[str, str]]] = []
 
 
 class FakeRedis:
@@ -29,6 +30,17 @@ async def client(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AsyncClient]:
     monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
     monkeypatch.setenv("JWT_SECRET", secrets.token_urlsafe(48))
     get_settings.cache_clear()
+    sent_emails.clear()
+
+    async def fake_send_email(
+        template: str,
+        *,
+        recipient: str,
+        parameters: dict[str, str],
+    ) -> None:
+        sent_emails.append((template, recipient, parameters))
+
+    monkeypatch.setattr("app.auth.service.send_email", fake_send_email)
 
     engine = create_async_engine(
         "sqlite+aiosqlite://",
@@ -64,6 +76,19 @@ async def register(client: AsyncClient, email: str = "alice@example.com") -> Non
         json={"email": email, "password": "StrongPassword123!"},
     )
     assert response.status_code == 201
+    await verify_email(client, email)
+
+
+async def verify_email(client: AsyncClient, email: str) -> None:
+    email = email.strip().lower()
+    _, _, parameters = next(
+        message for message in reversed(sent_emails) if message[1] == email
+    )
+    response = await client.post(
+        "/v1/auth/verify-email",
+        json={"email": email, "code": parameters["otp_code"]},
+    )
+    assert response.status_code == 200
 
 
 async def login(
@@ -88,7 +113,25 @@ async def test_register_login_and_current_user(client: AsyncClient) -> None:
 
     assert response.status_code == 201
     assert response.json()["data"]["email"] == "alice@example.com"
-    assert "password" not in response.json()["data"]
+    assert "verification code" in response.json()["data"]["message"]
+
+    blocked_login = await client.post(
+        "/v1/auth/login",
+        json={"email": "alice@example.com", "password": "StrongPassword123!"},
+    )
+    assert blocked_login.status_code == 403
+    assert blocked_login.json()["error"]["code"] == "email_not_verified"
+
+    await verify_email(client, "alice@example.com")
+    _, _, verification_parameters = sent_emails[0]
+    reused_code = await client.post(
+        "/v1/auth/verify-email",
+        json={
+            "email": "alice@example.com",
+            "code": verification_parameters["otp_code"],
+        },
+    )
+    assert reused_code.status_code == 400
 
     tokens = await login(client)
     profile = await client.get(
@@ -98,6 +141,75 @@ async def test_register_login_and_current_user(client: AsyncClient) -> None:
 
     assert profile.status_code == 200
     assert profile.json()["data"]["email"] == "alice@example.com"
+
+
+async def test_password_reset_revokes_existing_sessions(client: AsyncClient) -> None:
+    await register(client)
+    tokens = await login(client)
+
+    response = await client.post(
+        "/v1/auth/forgot-password",
+        json={"email": "alice@example.com"},
+    )
+    assert response.status_code == 202
+    _, _, parameters = next(
+        message
+        for message in reversed(sent_emails)
+        if message[1] == "alice@example.com"
+        and message[2]["action"] == "reset your password"
+    )
+    reset = await client.post(
+        "/v1/auth/reset-password",
+        json={
+            "email": "alice@example.com",
+            "code": parameters["otp_code"],
+            "new_password": "NewStrongPassword456!",
+        },
+    )
+
+    old_profile = await client.get(
+        "/v1/auth/me",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+    old_refresh = await client.post(
+        "/v1/auth/refresh",
+        json={"refresh_token": tokens["refresh_token"]},
+    )
+    new_login = await client.post(
+        "/v1/auth/login",
+        json={
+            "email": "alice@example.com",
+            "password": "NewStrongPassword456!",
+        },
+    )
+
+    assert reset.status_code == 200
+    assert old_profile.status_code == 401
+    assert old_refresh.status_code == 401
+    assert new_login.status_code == 200
+
+
+async def test_verification_code_attempts_are_limited(client: AsyncClient) -> None:
+    response = await client.post(
+        "/v1/auth/register",
+        json={"email": "alice@example.com", "password": "StrongPassword123!"},
+    )
+    assert response.status_code == 201
+    _, _, parameters = sent_emails[0]
+    wrong_code = f"{(int(parameters['otp_code']) + 1) % 1_000_000:06d}"
+
+    for _ in range(5):
+        invalid = await client.post(
+            "/v1/auth/verify-email",
+            json={"email": "alice@example.com", "code": wrong_code},
+        )
+        assert invalid.status_code == 400
+
+    after_lockout = await client.post(
+        "/v1/auth/verify-email",
+        json={"email": "alice@example.com", "code": parameters["otp_code"]},
+    )
+    assert after_lockout.status_code == 400
 
 
 async def test_duplicate_email_and_bad_login_are_safe(client: AsyncClient) -> None:

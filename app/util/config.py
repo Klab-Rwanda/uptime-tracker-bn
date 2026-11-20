@@ -18,6 +18,13 @@ class Settings(BaseSettings):
     jwt_audience: str = "uptimetracker-client"
     access_token_ttl_seconds: int = 900
     refresh_token_ttl_days: int = 30
+    brevo_smtp_host: str = "smtp-relay.brevo.com"
+    brevo_smtp_port: int = 587
+    brevo_smtp_login: str = ""
+    brevo_smtp_key: SecretStr = SecretStr("")
+    brevo_sender_email: str = ""
+    brevo_sender_name: str = ""
+    email_code_ttl_minutes: int = 10
 
     @field_validator("jwt_secret")
     @classmethod
