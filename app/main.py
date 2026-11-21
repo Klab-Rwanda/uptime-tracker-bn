@@ -1,25 +1,45 @@
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
+from app.auth.errors import APIError
+from app.auth.router import router as auth_router
 from app.routes import health
 from app.util.database import dispose_engine
 from app.util.errors import register_error_handlers
 from app.util.logs import register_logging
 from app.util.metrics import register_metrics
-from app.util.redis import close_redis
+from app.util.redis import close_redis_client
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    yield
-    await dispose_engine()
-    await close_redis()
+async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
+    try:
+        yield
+    finally:
+        await dispose_engine()
+        await close_redis_client()
 
 
 app = FastAPI(title="UpTimeTracker API", version="0.1.0", lifespan=lifespan)
 register_logging(app)
 register_metrics(app)
 register_error_handlers(app)
-
+app.include_router(auth_router)
 app.include_router(health.router)
+
+
+@app.exception_handler(APIError)
+async def handle_api_error(_: Request, error: APIError) -> JSONResponse:
+    return JSONResponse(
+        status_code=error.status_code,
+        content={
+            "error": {
+                "code": error.code,
+                "message": error.message,
+            }
+        },
+        headers=error.headers,
+    )

@@ -1,31 +1,33 @@
-# UpTimeTracker API - Python dependencies (FastAPI stack)
-# ------------------------------------------------------------------------------
-# Python: 3.12+
-# Install: python -m pip install -r requirements.txt
-#
-# Runtime dependencies only (these go into the Docker image).
-# Dev/test tools (pytest, ruff, mypy, httpx) live in requirements-dev.txt.
-#
-# Versions are pinned with '==' for reproducible installs across environments.
-# ==============================================================================
-
 # --- Framework / ASGI server --------------------------------------------------
-fastapi==0.163.1                 # API framework, routing and OpenAPI docs
-uvicorn[standard]==0.54.0        # ASGI server (adds uvloop, httptools, watchfiles)
-pydantic==2.14.3                 # request/response validation and serialization
-pydantic-settings==2.16.3        # typed settings loaded from the environment
-python-dotenv==1.2.4             # .env file support for local development
+fastapi==0.163.1
+uvicorn[standard]==0.54.0
+pydantic==2.14.3
+pydantic-settings==2.16.3
+python-dotenv==1.2.4
 
 # --- Persistence / migrations -------------------------------------------------
-sqlalchemy[asyncio]==2.1.9                # ORM / database toolkit
-asyncpg==0.32.0                  # async driver for postgresql+asyncpg:// URLs
-alembic==1.20.1                  # database schema migrations
+sqlalchemy[asyncio]==2.1.9
+asyncpg==0.32.0
+greenlet>=3.0.0
+alembic==1.20.1
 
 # --- Caching / queues ---------------------------------------------------------
-redis==8.1.0                     # Redis client for REDIS_URL (cache, workers)
+redis==8.1.0
 
-# --- Security -----------------------------------------------------------------
-pyjwt==2.15.1                    # JWT encode/decode for JWT_SECRET-based auth
+# --- Security ----------------------------------------------------------------
+pyjwt==2.15.1
+argon2-cffi==25.1.0
+email-validator==2.3.0
 
 # --- Observability ------------------------------------------------------------
-prometheus-client==0.24.1        # Prometheus metrics for /metrics
+prometheus-client==0.24.1
+
+# --- Testing ------------------------------------------------------------------
+pytest==9.2.0
+pytest-asyncio==1.5.0
+httpx==0.28.1
+aiosqlite==0.21.0
+
+# --- Code quality / type checking ---------------------------------------------
+ruff==0.17.5
+mypy==2.4.1
