@@ -20,5 +20,9 @@ build/
 dist/
 node_modules/
 
-# Planning document kept outside the source repository
+# Editor settings
+.vscode/
+
+# Planning documents kept outside the source repository
 /platform-monitoring-api-contract-and-mvp-plan.pdf
+project_pdf.md
