@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     brevo_api_key: SecretStr = SecretStr("")
     email_code_ttl_minutes: int = 10
 
+    # Webhooks
+    # DEV ONLY: allows http:// and private/local targets. Must stay false in production.
+    webhook_allow_private_targets: bool = False
+
     sentry_dsn: str | None = None
     sentry_environment: str = "development"
 
