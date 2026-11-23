@@ -6,6 +6,9 @@ from fastapi.responses import JSONResponse
 
 from app.auth.errors import APIError
 from app.auth.router import router as auth_router
+from app.organizations.router import invitations_router
+from app.organizations.router import router as organizations_router
+from app.projects.router import router as projects_router
 from app.routes import health
 from app.util.database import dispose_engine
 from app.util.errors import register_error_handlers
@@ -26,6 +29,9 @@ app = FastAPI(title="UpTimeTracker API", version="0.1.0", lifespan=lifespan)
 register_logging(app)
 register_error_handlers(app)
 app.include_router(auth_router)
+app.include_router(organizations_router)
+app.include_router(invitations_router)
+app.include_router(projects_router)
 app.include_router(health.router)
 
 

@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     brevo_sender_email: str = ""
     brevo_sender_name: str = ""
     email_code_ttl_minutes: int = 10
+    app_frontend_url: str = "http://localhost:3000"
+    invitation_ttl_hours: int = 48
 
     sentry_dsn: str | None = None
     sentry_environment: str = "development"
