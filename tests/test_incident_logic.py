@@ -1,46 +1,12 @@
 import pytest
 
 from app.services.incident_logic import (
-    FAILURE_THRESHOLD,
     IncidentStatus,
     InvalidIncidentTransition,
-    should_open_incident,
-    should_resolve_incident,
     transition,
 )
 
-
-@pytest.mark.parametrize(
-    ("failures", "has_active", "expected"),
-    [
-        (0, False, False),
-        (1, False, False),
-        (2, False, True),
-        (5, False, True),
-        (2, True, False),  # already has an incident: don't open a duplicate
-        (5, True, False),
-    ],
-)
-def test_should_open_incident(failures, has_active, expected):
-    assert should_open_incident(failures, has_active) is expected
-
-
-def test_failure_threshold_is_two():
-    # The MVP definition of done: "Two consecutive failures create a DOWN incident"
-    assert FAILURE_THRESHOLD == 2
-
-
-@pytest.mark.parametrize(
-    ("is_up", "has_active", "expected"),
-    [
-        (True, True, True),
-        (True, False, False),
-        (False, True, False),
-        (False, False, False),
-    ],
-)
-def test_should_resolve_incident(is_up, has_active, expected):
-    assert should_resolve_incident(is_up, has_active) is expected
+# When incidents open and resolve is tested in tests/test_incident_rules.py
 
 
 @pytest.mark.parametrize(
