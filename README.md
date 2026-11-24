@@ -138,6 +138,32 @@ error envelope.
 - `PATCH /v1/projects/{project_id}` — update project name (`{"name": "..."}`). Requires editor role or higher.
 - `DELETE /v1/projects/{project_id}` — delete project. Requires owner or admin role.
 
+## Monitor CRUD endpoints
+
+- `POST /v1/monitors` — create a monitor for HTTP/HTTPS, TCP, DNS, or Push (`{"organization_id": "...", "name": "...", "type": "http", "target": "https://...", ...}`). Requires editor role or higher.
+- `GET /v1/monitors?organization_id=...` — list monitors in the organization. Optional filters: `project_id`, `status` (`pending`, `up`, `down`, `paused`), and `type` (`http`, `tcp`, `dns`, `push`). Requires organization membership.
+- `GET /v1/monitors/{monitor_id}` — get monitor details. Requires organization membership.
+- `PATCH /v1/monitors/{monitor_id}` — update monitor settings (e.g. `interval_seconds`, `target`, `name`, `active`). Requires editor role or higher.
+- `DELETE /v1/monitors/{monitor_id}` — delete a monitor. Requires owner or admin role.
+- `POST /v1/monitors/{monitor_id}/pause` — pause a monitor (sets `is_active=false` and `status="paused"`). Requires editor role or higher.
+- `POST /v1/monitors/{monitor_id}/resume` — resume a monitor (sets `is_active=true` and `status="pending"`). Requires editor role or higher.
+- `POST /v1/monitors/{monitor_id}/test` — trigger an immediate check test for a monitor. Requires editor role or higher.
+
+## API Key endpoints
+
+- `POST /v1/api-keys` — create a machine-to-machine API key (`{"organization_id": "...", "name": "...", "scopes": ["monitors:read", "monitors:write"]}`). Returns `sk_live_...` plaintext once. Requires owner or admin role.
+- `GET /v1/api-keys?organization_id=...` — list active API keys and their scopes (only key prefixes shown). Requires organization membership.
+- `DELETE /v1/api-keys/{id}` — revoke an API key. Requires owner or admin role.
+- *API Key Auth*: Use `Authorization: Bearer sk_live_...` on all protected endpoints.
+
+## Dashboard Summary endpoints
+
+- `GET /v1/dashboard/summary?organization_id=...` — aggregated monitor count breakdown (`up`, `down`, `pending`, `paused`, `maintenance`) across the organization and per-project. Requires organization membership.
+
+## WebSocket Live Updates
+
+- `WebSocket /v1/ws?token=<access_token_or_api_key>&organization_id=<org_id>` — real-time event streaming socket for live monitor status and check results. Authenticates via JWT or API key. Send `{"type": "ping"}` for heartbeat health. Broadcasts events sent to Redis channel `org:<org_id>:events`.
+
 Thunder Client request bodies:
 
 ```json

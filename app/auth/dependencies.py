@@ -3,12 +3,14 @@ from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
+import hashlib
 import jwt
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api_keys.models import ApiKey
 from app.auth.errors import APIError
 from app.auth.models import AuthSession, User
 from app.auth.security import decode_access_token
@@ -39,8 +41,39 @@ async def get_current_auth(
             "Authentication is required",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    raw_token = credentials.credentials.strip()
+
+    # Handle API Key authentication
+    if raw_token.startswith("sk_live_"):
+        key_hash = hashlib.sha256(raw_token.encode("utf-8")).digest()
+        api_key = await session.scalar(
+            select(ApiKey).where(
+                ApiKey.key_hash == key_hash,
+                ApiKey.revoked_at.is_(None),
+            )
+        )
+        if api_key is None:
+            raise APIError(
+                401,
+                "invalid_token",
+                "The API key is invalid or revoked",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        api_key.last_used_at = datetime.now(UTC)
+        await session.commit()
+        user = await session.get(User, api_key.created_by_user_id)
+        if user is None or not user.is_active:
+            raise APIError(
+                401,
+                "invalid_token",
+                "The API key owner account is inactive or not found",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return AuthenticatedUser(user=user, session_id=api_key.id)
+
     try:
-        user_id, auth_session_id = decode_access_token(credentials.credentials)
+        user_id, auth_session_id = decode_access_token(raw_token)
     except (jwt.InvalidTokenError, ValueError) as error:
         raise APIError(
             401,
