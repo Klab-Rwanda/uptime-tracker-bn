@@ -1,4 +1,4 @@
-from collections.abc import AsyncGenerator
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -14,6 +14,7 @@ from app.organizations.router import invitations_router
 from app.organizations.router import router as organizations_router
 from app.projects.router import router as projects_router
 from app.routes import health
+from app.routes.checks import router as checks_router
 from app.util.database import dispose_engine
 from app.util.errors import register_error_handlers
 from app.util.logs import register_logging
@@ -31,7 +32,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
         await close_redis_client()
 
 
-app = FastAPI(title="UpTimeTracker API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="PulseMonitor API", version="0.1.0", lifespan=lifespan)
 register_logging(app)
 register_metrics(app)
 register_error_handlers(app)
@@ -45,17 +46,4 @@ app.include_router(api_keys_router)
 app.include_router(dashboard_router)
 app.include_router(ws_router)
 app.include_router(health.router)
-
-
-@app.exception_handler(APIError)
-async def handle_api_error(_: Request, error: APIError) -> JSONResponse:
-    return JSONResponse(
-        status_code=error.status_code,
-        content={
-            "error": {
-                "code": error.code,
-                "message": error.message,
-            }
-        },
-        headers=error.headers,
-    )
+app.include_router(checks_router)
