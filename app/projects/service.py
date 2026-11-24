@@ -5,7 +5,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import AuthenticatedUser
 from app.auth.errors import APIError
-from app.organizations.models import OrganizationMembership
 from app.organizations.service import _get_org_membership
 from app.projects.models import Project
 

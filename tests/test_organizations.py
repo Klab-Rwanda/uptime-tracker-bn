@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select, update
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -190,7 +190,7 @@ async def test_owner_can_invite_existing_verified_account_and_member_accepts(
     assert replay.status_code == 400
 
     # Also test PDF contract endpoint POST /v1/organizations/{id}/members invites a third member
-    third_tokens, _ = await create_account(client, "third_contract@example.com")
+    _third_tokens, _ = await create_account(client, "third_contract@example.com")
     contract_invite = await client.post(
         f"/v1/organizations/{org_id}/members",
         json={"email": "third_contract@example.com", "role": "viewer"},
@@ -334,7 +334,7 @@ async def test_only_owner_can_manage_collaborators_and_members_can_leave(
 ) -> None:
     owner_tokens, _ = await create_account(client, "owner_perm@example.com")
     member_tokens, _ = await create_account(client, "member_perm@example.com")
-    third_tokens, _ = await create_account(client, "third@example.com")
+    _third_tokens, _ = await create_account(client, "third@example.com")
 
     created = await client.post(
         "/v1/organizations",
