@@ -109,6 +109,61 @@ error envelope.
   login session and its refresh tokens. Logout does not issue another token.
 - `GET /v1/auth/me` — return the authenticated user profile.
 
+## Organization & Collaborator endpoints
+
+- `POST /v1/organizations` — create an organization. The creator automatically receives the `owner` role.
+- `GET /v1/organizations` — list organizations the authenticated user belongs to.
+- `GET /v1/organizations/{organization_id}` — get organization details.
+- `PATCH /v1/organizations/{organization_id}` — update organization name (owner or admin role required).
+- `POST /v1/organizations/{organization_id}/transfer-ownership` — transfer organization ownership to an existing member (owner only).
+- `GET /v1/organizations/{organization_id}/members` — list organization members.
+- `DELETE /v1/organizations/{organization_id}/members/me` — leave organization (owner must transfer ownership first).
+- `DELETE /v1/organizations/{organization_id}/members/{member_user_id}` — remove a member (owner or admin role required; owner cannot be removed).
+- `POST /v1/organizations/{organization_id}/invitations` (or `POST /v1/organizations/{organization_id}/members`) — invite a collaborator.
+  - Recipient **must** have an active, verified account in the system prior to receiving an invitation (`404` error if non-existent or unverified).
+  - Invitations expire strictly after **48 hours**.
+  - Generates a high-entropy cryptographically secure token (only SHA-256 hash stored in DB).
+  - Sends a secure Brevo email with the invitation link.
+- `GET /v1/organizations/{organization_id}/invitations` — list pending/historical invitations for the organization (owner or admin).
+- `DELETE /v1/organizations/{organization_id}/invitations/{invitation_id}` — revoke a pending invitation (owner or admin).
+- `POST /v1/organizations/invitations/accept` (or `POST /v1/invitations/accept`) — accept an invitation by submitting `{"token": "..."}`.
+  - Requires the user to be authenticated with the exact matching email address the invite was issued to.
+  - Enforces active status and verification, rejects expired invitations (`410`).
+
+## Project endpoints
+
+- `POST /v1/projects` — create a project within an organization (`{"organization_id": "...", "name": "..."}`). Requires editor role or higher.
+- `GET /v1/projects?organization_id=...` — list projects in the organization. Requires organization membership.
+- `GET /v1/projects/{project_id}` — get project details. Requires organization membership.
+- `PATCH /v1/projects/{project_id}` — update project name (`{"name": "..."}`). Requires editor role or higher.
+- `DELETE /v1/projects/{project_id}` — delete project. Requires owner or admin role.
+
+## Monitor CRUD endpoints
+
+- `POST /v1/monitors` — create a monitor for HTTP/HTTPS, TCP, DNS, or Push (`{"organization_id": "...", "name": "...", "type": "http", "target": "https://...", ...}`). Requires editor role or higher.
+- `GET /v1/monitors?organization_id=...` — list monitors in the organization. Optional filters: `project_id`, `status` (`pending`, `up`, `down`, `paused`), and `type` (`http`, `tcp`, `dns`, `push`). Requires organization membership.
+- `GET /v1/monitors/{monitor_id}` — get monitor details. Requires organization membership.
+- `PATCH /v1/monitors/{monitor_id}` — update monitor settings (e.g. `interval_seconds`, `target`, `name`, `active`). Requires editor role or higher.
+- `DELETE /v1/monitors/{monitor_id}` — delete a monitor. Requires owner or admin role.
+- `POST /v1/monitors/{monitor_id}/pause` — pause a monitor (sets `is_active=false` and `status="paused"`). Requires editor role or higher.
+- `POST /v1/monitors/{monitor_id}/resume` — resume a monitor (sets `is_active=true` and `status="pending"`). Requires editor role or higher.
+- `POST /v1/monitors/{monitor_id}/test` — trigger an immediate check test for a monitor. Requires editor role or higher.
+
+## API Key endpoints
+
+- `POST /v1/api-keys` — create a machine-to-machine API key (`{"organization_id": "...", "name": "...", "scopes": ["monitors:read", "monitors:write"]}`). Returns `sk_live_...` plaintext once. Requires owner or admin role.
+- `GET /v1/api-keys?organization_id=...` — list active API keys and their scopes (only key prefixes shown). Requires organization membership.
+- `DELETE /v1/api-keys/{id}` — revoke an API key. Requires owner or admin role.
+- *API Key Auth*: Use `Authorization: Bearer sk_live_...` on all protected endpoints.
+
+## Dashboard Summary endpoints
+
+- `GET /v1/dashboard/summary?organization_id=...` — aggregated monitor count breakdown (`up`, `down`, `pending`, `paused`, `maintenance`) across the organization and per-project. Requires organization membership.
+
+## WebSocket Live Updates
+
+- `WebSocket /v1/ws?token=<access_token_or_api_key>&organization_id=<org_id>` — real-time event streaming socket for live monitor status and check results. Authenticates via JWT or API key. Send `{"type": "ping"}` for heartbeat health. Broadcasts events sent to Redis channel `org:<org_id>:events`.
+
 Thunder Client request bodies:
 
 ```json

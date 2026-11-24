@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     # app still starts without it.
     brevo_api_key: SecretStr = SecretStr("")
     email_code_ttl_minutes: int = 10
+    app_frontend_url: str = "http://localhost:3000"
+    invitation_ttl_hours: int = 48
 
     # Webhooks
     # DEV ONLY: allows http:// and private/local targets. Must stay false in production.

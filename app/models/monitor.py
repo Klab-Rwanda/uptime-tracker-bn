@@ -1,49 +1,78 @@
+from datetime import datetime
+from uuid import UUID, uuid4
+
 from sqlalchemy import (
     Boolean,
-    Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
+    Uuid,
+    func,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.util.database import Base
 
 
 class Monitor(Base):
     __tablename__ = "monitors"
+    __table_args__ = (
+        Index("monitors_org_project_idx", "organization_id", "project_id"),
+        Index("monitors_next_check_idx", "is_active", "next_check_at"),
+    )
 
-    id = Column(UUID(as_uuid=True), primary_key=True)
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid4
+    )
 
-    organization_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey("organizations.id"),
+    organization_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=False,
     )
 
-    name = Column(String(255), nullable=False)
-    monitor_type = Column(String(10), nullable=False)
-    target = Column(Text, nullable=False)
+    project_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
-    method = Column(String(10), nullable=True)
-    expected_status_codes = Column(String(255), nullable=True)
-    keyword = Column(Text, nullable=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    monitor_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    target: Mapped[str] = mapped_column(Text, nullable=False)
 
-    timeout_seconds = Column(Integer, nullable=False, default=30)
-    retry_count = Column(Integer, nullable=False, default=0)
-    retry_interval_seconds = Column(Integer, nullable=False, default=60)
-    check_interval_seconds = Column(Integer, nullable=False, default=60)
+    method: Mapped[str | None] = mapped_column(String(10), nullable=True, default="GET")
+    expected_status_codes: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    keyword: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    is_active = Column(Boolean, nullable=False, default=True)
-    current_status = Column(String(20), nullable=False, default="pending")
+    timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
+    retry_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    check_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
 
-    consecutive_failures = Column(Integer, nullable=False, default=0)
-    consecutive_successes = Column(Integer, nullable=False, default=0)
+    regions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notification_channel_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    last_checked_at = Column(DateTime(timezone=True), nullable=True)
-    next_check_at = Column(DateTime(timezone=True), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    current_status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
 
-    created_at = Column(DateTime(timezone=True), nullable=False)
-    updated_at = Column(DateTime(timezone=True), nullable=False)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    consecutive_successes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_check_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
