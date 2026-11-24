@@ -47,7 +47,9 @@ class NotificationDelivery(Base):
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     idempotency_key: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    # TODO: ForeignKey to notification_channels.id once that table exists (C-17)
+    # Deliberately no foreign key: a delivery is a history record and must survive
+    # the channel being deleted. The dispatcher treats a missing channel as a
+    # permanent failure.
     channel_id: Mapped[str] = mapped_column(String(64), nullable=False)
     # What to send, so any worker can (re)send it later
     payload: Mapped[dict[str, Any]] = mapped_column(
