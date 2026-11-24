@@ -1,9 +1,9 @@
+import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
-import hashlib
 import jwt
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api_keys.models import ApiKey
+from app.auth.api_key_access import ApiKeyGrant, parse_scopes, set_current_grant
 from app.auth.errors import APIError
 from app.auth.models import AuthSession, User
 from app.auth.security import decode_access_token
@@ -28,12 +29,15 @@ DatabaseSession = Annotated[AsyncSession, Depends(get_db_session)]
 class AuthenticatedUser:
     user: User
     session_id: UUID
+    # Set when the request uses an API key: its organization and scopes
+    api_key: ApiKeyGrant | None = None
 
 
 async def get_current_auth(
     credentials: BearerCredentials,
     session: DatabaseSession,
 ) -> AuthenticatedUser:
+    set_current_grant(None)  # never inherit a grant from earlier work in this context
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise APIError(
             401,
@@ -70,7 +74,13 @@ async def get_current_auth(
                 "The API key owner account is inactive or not found",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        return AuthenticatedUser(user=user, session_id=api_key.id)
+        grant = ApiKeyGrant(
+            key_id=api_key.id,
+            organization_id=api_key.organization_id,
+            scopes=parse_scopes(api_key.scopes),
+        )
+        set_current_grant(grant)
+        return AuthenticatedUser(user=user, session_id=api_key.id, api_key=grant)
 
     try:
         user_id, auth_session_id = decode_access_token(raw_token)
