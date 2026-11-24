@@ -51,7 +51,7 @@ class DNSCheck(BaseCheck):
                 status="down",
                 response_time_ms=response_time_ms,
                 checked_at=checked_at,
-                error_message=f"DNS resolution timed out after {self.timeout_seconds}s",
+                error_message=f"DNS lookup timed out after {self.timeout_seconds}s",
             )
 
         except Exception as e:
