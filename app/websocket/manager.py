@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 from datetime import UTC, datetime
@@ -34,7 +33,9 @@ class ConnectionManager:
         for websocket in sockets:
             try:
                 await websocket.send_json(message)
-            except Exception:
+            # A dead client can fail in many ways; one bad socket must not stop
+            # the broadcast to everyone else, so drop it whatever the error
+            except Exception:  # noqa: BLE001
                 self.disconnect(organization_id, websocket)
 
     async def broadcast_org_event(
@@ -55,7 +56,8 @@ class ConnectionManager:
             redis = get_redis_client()
             channel = f"org:{organization_id}:events"
             await redis.publish(channel, json.dumps(payload))
-        except Exception as error:
+        # Redis is optional for live updates: never let it break the request
+        except Exception as error:  # noqa: BLE001
             logger.debug("Redis publish not available: %s", error)
 
 

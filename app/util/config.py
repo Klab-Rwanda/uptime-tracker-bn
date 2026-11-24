@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     # DEV ONLY: allows http:// and private/local targets. Must stay false in production.
     webhook_allow_private_targets: bool = False
 
+    # Notification channels: Fernet keys, comma-separated. The FIRST key encrypts;
+    # every key can decrypt, so keys can be rotated.
+    channel_encryption_keys: SecretStr = SecretStr("")
+
     sentry_dsn: str | None = None
     sentry_environment: str = "development"
 

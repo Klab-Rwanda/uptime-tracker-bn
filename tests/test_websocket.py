@@ -9,6 +9,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from app.auth.errors import APIError
 from app.main import app
 from app.util.config import get_settings
 from app.util.database import Base, get_db_session
@@ -147,5 +148,5 @@ async def test_websocket_auth(client: AsyncClient) -> None:
         await _authenticate_ws("bad_token", org_id)
 
     # 3. Outsider user not in org raises APIError/ValueError
-    with pytest.raises(Exception):
+    with pytest.raises((APIError, ValueError)):
         await _authenticate_ws(outsider_tokens["access_token"], org_id)
