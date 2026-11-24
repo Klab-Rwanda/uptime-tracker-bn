@@ -1,66 +1,76 @@
-import uuid
+import json
+import logging
 from datetime import datetime, timezone
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.checks.dns_check import DNSCheck
 from app.checks.http_check import HTTPCheck
-from app.models.heartbeat import Heartbeat
+from app.checks.tcp_check import TCPCheck
 from app.models.monitor import Monitor
+from app.services.incident_logic import should_open_incident, should_resolve_incident
+from app.workers.heartbeat import save_heartbeat
+
+logger = logging.getLogger(__name__)
 
 
-def parse_status_codes(raw: str | None) -> list[int]:
-    if not raw:
-        return [200]
-    return [int(code.strip()) for code in raw.split(",") if code.strip().isdigit()]
+def _build_check(monitor: Monitor):
+    monitor_id = str(monitor.id)
+    if monitor.monitor_type in ("http", "https"):
+        codes = json.loads(monitor.expected_status_codes) if monitor.expected_status_codes else None
+        return HTTPCheck(
+            monitor_id=monitor_id,
+            target=monitor.target,
+            method=monitor.method or "GET",
+            expected_status_codes=codes,
+            keyword=monitor.keyword,
+            timeout_seconds=monitor.timeout_seconds,
+        )
+    if monitor.monitor_type == "tcp":
+        return TCPCheck(
+            monitor_id=monitor_id,
+            target=monitor.target,
+            timeout_seconds=monitor.timeout_seconds,
+        )
+    if monitor.monitor_type == "dns":
+        return DNSCheck(
+            monitor_id=monitor_id,
+            target=monitor.target,
+            timeout_seconds=monitor.timeout_seconds,
+        )
+    raise ValueError(f"Unsupported monitor type: {monitor.monitor_type}")
 
 
-async def run_monitor(monitor: Monitor, db: AsyncSession) -> None:
-    check = HTTPCheck(
-        monitor_id=str(monitor.id),
-        target=monitor.target,
-        method=monitor.method or "GET",
-        expected_status_codes=parse_status_codes(monitor.expected_status_codes),
-        keyword=monitor.keyword,
-        timeout_seconds=monitor.timeout_seconds,
+async def run_check(monitor: Monitor, session: AsyncSession) -> None:
+    has_active_incident = (
+        monitor.consecutive_failures >= 2 and monitor.current_status == "down"
     )
 
-    result = await check.run()
+    try:
+        check = _build_check(monitor)
+        result = await check.run()
+    except Exception:
+        logger.exception("Check failed for monitor %s", monitor.id)
+        return
 
-    heartbeat = Heartbeat(
-        id=uuid.uuid4(),
-        monitor_id=monitor.id,
-        status=result.status,
-        response_time_ms=result.response_time_ms,
-        checked_at=result.checked_at,
-        error_message=result.error_message,
-    )
-    db.add(heartbeat)
+    await save_heartbeat(session, monitor, result)
 
-    monitor.current_status = result.status
-    monitor.last_checked_at = result.checked_at
-    monitor.next_check_at = datetime.fromtimestamp(
-        result.checked_at.timestamp() + monitor.check_interval_seconds,
-        tz=timezone.utc,
-    )
+    is_up = result.status == "up"
 
-    if result.status == "up":
-        monitor.consecutive_successes += 1
-        monitor.consecutive_failures = 0
-    else:
-        monitor.consecutive_failures += 1
-        monitor.consecutive_successes = 0
+    if should_open_incident(monitor.consecutive_failures, has_active_incident):
+        logger.info("Incident should be opened for monitor %s", monitor.id)
 
-    await db.commit()
+    if should_resolve_incident(is_up, has_active_incident):
+        logger.info("Incident should be resolved for monitor %s", monitor.id)
 
 
-async def run_due_monitors(db: AsyncSession) -> None:
+async def run_due_monitors(session: AsyncSession) -> None:
     now = datetime.now(timezone.utc)
-
-    result = await db.execute(
+    result = await session.execute(
         select(Monitor).where(
             Monitor.is_active == True,
-            Monitor.monitor_type == "http",
             Monitor.next_check_at <= now,
         )
     )
@@ -68,6 +78,6 @@ async def run_due_monitors(db: AsyncSession) -> None:
 
     for monitor in monitors:
         try:
-            await run_monitor(monitor, db)
-        except Exception as e:
-            print(f"Failed to run monitor {monitor.id}: {e}")
+            await run_check(monitor, session)
+        except Exception:
+            logger.exception("Unexpected error running monitor %s", monitor.id)
