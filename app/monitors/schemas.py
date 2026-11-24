@@ -1,4 +1,3 @@
-import json
 from datetime import datetime
 from typing import Literal
 from urllib.parse import urlsplit
@@ -64,9 +63,8 @@ class MonitorCreate(BaseModel):
                     raise ValueError
             except ValueError:
                 raise ValueError("TCP target port must be between 1 and 65535")
-        elif monitor_type == "dns":
-            if "://" in target or "/" in target or not target:
-                raise ValueError("DNS target must be a valid hostname or domain")
+        elif monitor_type == "dns" and ("://" in target or "/" in target or not target):
+            raise ValueError("DNS target must be a valid hostname or domain")
 
         return self
 

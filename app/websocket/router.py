@@ -1,6 +1,6 @@
-import asyncio
 import json
 from datetime import UTC, datetime
+from typing import Annotated
 from uuid import UUID
 
 import jwt
@@ -8,6 +8,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
 from sqlalchemy import select
 
 from app.api_keys.service import verify_api_key
+from app.auth.errors import APIError
 from app.auth.models import AuthSession, User
 from app.auth.security import decode_access_token
 from app.organizations.service import _get_org_membership
@@ -67,12 +68,12 @@ async def _authenticate_ws(
 @router.websocket("/v1/ws")
 async def websocket_endpoint(
     websocket: WebSocket,
-    token: str = Query(...),
-    organization_id: UUID = Query(...),
+    token: Annotated[str, Query()],
+    organization_id: Annotated[UUID, Query()],
 ) -> None:
     try:
         user = await _authenticate_ws(token, organization_id)
-    except Exception:
+    except (ValueError, APIError):  # bad token, inactive user, or not a member
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
@@ -90,14 +91,14 @@ async def websocket_endpoint(
             data = await websocket.receive_text()
             try:
                 parsed = json.loads(data)
-                if parsed.get("type") == "ping":
-                    await websocket.send_json(
-                        {
-                            "type": "pong",
-                            "timestamp": datetime.now(UTC).isoformat(),
-                        }
-                    )
-            except Exception:
-                pass
+            except ValueError:
+                continue  # ignore messages that aren't JSON
+            if isinstance(parsed, dict) and parsed.get("type") == "ping":
+                await websocket.send_json(
+                    {
+                        "type": "pong",
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    }
+                )
     except WebSocketDisconnect:
         manager.disconnect(organization_id, websocket)

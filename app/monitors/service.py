@@ -9,6 +9,7 @@ from app.auth.dependencies import AuthenticatedUser
 from app.auth.errors import APIError
 from app.models.monitor import Monitor
 from app.monitors.schemas import MonitorCreate, MonitorResponse, MonitorUpdate
+from app.notification_channels.service import validate_channel_ids
 from app.organizations.service import _get_org_membership
 from app.projects.models import Project
 
@@ -80,6 +81,17 @@ async def create_monitor(
                 "The specified project does not exist in this organization",
             )
 
+    # Channels must belong to this organization, or alerts would go to another tenant
+    channel_ids = (
+        await validate_channel_ids(
+            session,
+            organization_id=data.organization_id,
+            channel_ids=data.notification_channel_ids,
+        )
+        if data.notification_channel_ids is not None
+        else None
+    )
+
     now = datetime.now(UTC)
     monitor = Monitor(
         organization_id=data.organization_id,
@@ -100,9 +112,7 @@ async def create_monitor(
         keyword=data.expected_keyword,
         regions=json.dumps(data.regions) if data.regions is not None else None,
         notification_channel_ids=(
-            json.dumps(data.notification_channel_ids)
-            if data.notification_channel_ids is not None
-            else None
+            json.dumps(channel_ids) if channel_ids is not None else None
         ),
         is_active=True,
         current_status="pending",
@@ -214,7 +224,13 @@ async def update_monitor(
     if data.regions is not None:
         monitor.regions = json.dumps(data.regions)
     if data.notification_channel_ids is not None:
-        monitor.notification_channel_ids = json.dumps(data.notification_channel_ids)
+        # Channels must belong to this monitor's organization (see create_monitor)
+        channel_ids = await validate_channel_ids(
+            session,
+            organization_id=monitor.organization_id,
+            channel_ids=data.notification_channel_ids,
+        )
+        monitor.notification_channel_ids = json.dumps(channel_ids)
 
     if data.active is not None:
         monitor.is_active = data.active

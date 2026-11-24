@@ -3,11 +3,14 @@ from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
+from cryptography.fernet import Fernet
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.main import app
+from app.notification_channels.crypto import ChannelCipher
+from app.notification_channels.dependencies import get_channel_cipher
 from app.util.config import get_settings
 from app.util.database import Base, get_db_session
 from app.util.redis import get_redis_client
@@ -60,6 +63,8 @@ async def client(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AsyncClient]:
 
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[get_redis_client] = lambda: FakeRedis()
+    test_cipher = ChannelCipher([Fernet.generate_key().decode()])
+    app.dependency_overrides[get_channel_cipher] = lambda: test_cipher
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
@@ -155,6 +160,18 @@ async def setup_org_and_members(client: AsyncClient):
 
 async def test_create_and_get_monitor_types(client: AsyncClient) -> None:
     data = await setup_org_and_members(client)
+    channel_resp = await client.post(
+        "/v1/notification-channels",
+        json={
+            "organization_id": data["org_id"],
+            "name": "On-call email",
+            "type": "email",
+            "config": {"recipients": ["oncall@example.com"]},
+        },
+        headers=bearer(data["editor"]),
+    )
+    assert channel_resp.status_code == 201
+    channel_id = channel_resp.json()["data"]["id"]
 
     # 1. HTTP monitor
     http_payload = {
@@ -171,7 +188,7 @@ async def test_create_and_get_monitor_types(client: AsyncClient) -> None:
         "accepted_status_codes": [200, 201],
         "expected_keyword": "ok",
         "regions": ["eu-west-1", "af-south-1"],
-        "notification_channel_ids": ["chan_123"],
+        "notification_channel_ids": [channel_id],
     }
     http_resp = await client.post(
         "/v1/monitors",
@@ -187,6 +204,7 @@ async def test_create_and_get_monitor_types(client: AsyncClient) -> None:
     assert created_http["is_active"] is True
     assert created_http["accepted_status_codes"] == [200, 201]
     assert created_http["regions"] == ["eu-west-1", "af-south-1"]
+    assert created_http["notification_channel_ids"] == [channel_id]
     monitor_id = created_http["id"]
 
     # 2. TCP monitor

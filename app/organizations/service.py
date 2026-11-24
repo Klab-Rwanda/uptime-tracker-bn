@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.api_key_access import check_grant_organization
 from app.auth.dependencies import AuthenticatedUser
 from app.auth.errors import APIError
 from app.auth.models import User
@@ -102,6 +103,8 @@ async def _get_org_membership(
     organization_id: UUID,
     user_id: UUID,
 ) -> tuple[Organization, OrganizationMembership]:
+    # An API key may only reach its own organization (see app/auth/api_key_access.py)
+    check_grant_organization(organization_id)
     stmt = (
         select(Organization, OrganizationMembership)
         .join(
