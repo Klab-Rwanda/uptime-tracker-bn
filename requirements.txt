@@ -24,6 +24,7 @@ pytest==9.2.0                    # test runner
 pytest-asyncio==1.5.0            # async test support
 httpx==0.28.1
 
-ruff==0.17.5                    
-mypy==2.4.1     
+ruff==0.17.5
+mypy==2.4.1
+dnspython==2.7.0
 
