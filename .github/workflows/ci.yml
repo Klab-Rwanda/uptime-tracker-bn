@@ -47,6 +47,8 @@ jobs:
     # Fake values only. Never put real secrets or the Neon URL here.
     env:
       DATABASE_URL: postgresql+asyncpg://ci:ci@localhost:5432/ci_test
+      # Runs the delivery-store tests against PostgreSQL too (tests/conftest.py)
+      TEST_POSTGRES_URL: postgresql+asyncpg://ci:ci@localhost:5432/ci_test
       REDIS_URL: redis://localhost:6379/0
       JWT_SECRET: ci-only-not-a-real-secret-padded-to-32-bytes
 
