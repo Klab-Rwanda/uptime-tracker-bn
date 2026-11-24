@@ -1,7 +1,7 @@
 from enum import StrEnum
 
-# Consecutive failed checks before a monitor gets an incident (MVP definition of done)
-FAILURE_THRESHOLD = 2
+# When an incident opens or resolves is decided in app/services/incident_rules.py.
+# This module only covers the incident's own status changes.
 
 
 class IncidentStatus(StrEnum):
@@ -27,16 +27,6 @@ _ALLOWED_TRANSITIONS: dict[IncidentStatus, frozenset[IncidentStatus]] = {
     IncidentStatus.ACKNOWLEDGED: frozenset({IncidentStatus.RESOLVED}),
     IncidentStatus.RESOLVED: frozenset(),
 }
-
-
-def should_open_incident(consecutive_failures: int, has_active_incident: bool) -> bool:
-    """True when a monitor has failed enough times and has no incident yet."""
-    return consecutive_failures >= FAILURE_THRESHOLD and not has_active_incident
-
-
-def should_resolve_incident(is_up: bool, has_active_incident: bool) -> bool:
-    """True when a monitor with an incident has recovered."""
-    return is_up and has_active_incident
 
 
 def transition(current: str, target: str) -> IncidentStatus:
