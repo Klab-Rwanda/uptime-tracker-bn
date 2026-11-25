@@ -51,13 +51,22 @@ class Incident(Base):
             sqlite_where=text("status <> 'resolved'"),
         ),
         Index("incidents_org_status_started_idx", "organization_id", "status", "started_at"),
+        # A monitor's incident history (monitor pages, status page)
+        Index("incidents_monitor_started_idx", "monitor_id", "started_at"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    # TODO: add ForeignKeys to organizations.id and monitors.id once those tables
-    # have migrations (Developer A). Declaring them now breaks Base.metadata.create_all.
-    organization_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-    monitor_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Must be a monitor of the same organization: the incident service checks this
+    monitor_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("monitors.id", ondelete="CASCADE"),
+        nullable=False,
+    )
 
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default=IncidentStatus.OPEN.value
