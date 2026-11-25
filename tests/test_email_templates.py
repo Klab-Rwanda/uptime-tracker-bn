@@ -85,3 +85,14 @@ def test_status_page_link_only_for_http_urls():
 )
 def test_format_duration(seconds, expected):
     assert format_duration(timedelta(seconds=seconds)) == expected
+
+
+def test_channel_test_email():
+    from app.services.email.templates import render_channel_test
+
+    mail = render_channel_test("On-call <b>team</b>\r\nBcc: evil@x.com", START)
+    assert mail.subject.startswith("[TEST] UpTimeTracker alerts for")
+    assert "\n" not in mail.subject and "\r" not in mail.subject
+    assert "<b>team</b>" not in mail.html
+    assert "&lt;b&gt;team&lt;/b&gt;" in mail.html
+    assert "2026-11-20 10:00:00 UTC" in mail.text
