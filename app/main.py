@@ -1,4 +1,4 @@
-import asyncio
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -47,3 +47,19 @@ app.include_router(dashboard_router)
 app.include_router(ws_router)
 app.include_router(health.router)
 app.include_router(checks_router)
+
+
+# Restored: a merge dropped this handler, which turned every APIError (401, 403,
+# 404, 409, 422 ...) into a 500. tests/test_app_errors.py now guards it.
+@app.exception_handler(APIError)
+async def handle_api_error(_: Request, error: APIError) -> JSONResponse:
+    return JSONResponse(
+        status_code=error.status_code,
+        content={
+            "error": {
+                "code": error.code,
+                "message": error.message,
+            }
+        },
+        headers=error.headers,
+    )
