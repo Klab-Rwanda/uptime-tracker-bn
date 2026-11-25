@@ -65,6 +65,34 @@ def _require_aware(value: datetime, name: str) -> datetime:
     return value
 
 
+MAX_LIST_LIMIT = 100
+
+
+async def list_incidents(
+    session: AsyncSession,
+    *,
+    organization_id: UUID,
+    status: str | None = None,
+    monitor_id: UUID | None = None,
+    limit: int = 50,
+) -> list[Incident]:
+    """An organization's incidents, newest first.
+
+    status: "open", "acknowledged", "resolved", or "active" (open or acknowledged).
+    """
+    stmt = select(Incident).where(Incident.organization_id == organization_id)
+    if status == "active":
+        stmt = stmt.where(Incident.status != IncidentStatus.RESOLVED.value)
+    elif status is not None:
+        stmt = stmt.where(Incident.status == IncidentStatus(status).value)
+    if monitor_id is not None:
+        stmt = stmt.where(Incident.monitor_id == monitor_id)
+    stmt = stmt.order_by(Incident.started_at.desc(), Incident.id).limit(
+        max(1, min(limit, MAX_LIST_LIMIT))
+    )
+    return list((await session.scalars(stmt)).all())
+
+
 async def get_active_incident(session: AsyncSession, monitor_id: UUID) -> Incident | None:
     """The monitor's unresolved (open or acknowledged) incident, if any."""
     return await session.scalar(
