@@ -1,6 +1,8 @@
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
+import dns.asyncresolver
+import dns.exception
 import dns.resolver
 
 from app.checks.base import BaseCheck
@@ -18,48 +20,35 @@ class DNSCheck(BaseCheck):
         self.target = target
         self.timeout_seconds = timeout_seconds
 
+    def _result(
+        self, status: str, checked_at: datetime, start: float, error: str | None = None
+    ) -> CheckResult:
+        return CheckResult(
+            monitor_id=self.monitor_id,
+            status=status,
+            response_time_ms=int((time.monotonic() - start) * 1000),
+            checked_at=checked_at,
+            error_message=error,
+        )
+
     async def run(self) -> CheckResult:
-        checked_at = datetime.now(timezone.utc)
+        checked_at = datetime.now(UTC)
         start = time.monotonic()
-
+        # The async resolver: the blocking one froze the whole event loop
+        # (every request and every other check) for the length of each lookup
+        resolver = dns.asyncresolver.Resolver()
+        resolver.lifetime = self.timeout_seconds
         try:
-            resolver = dns.resolver.Resolver()
-            resolver.lifetime = self.timeout_seconds
-            resolver.resolve(self.target, "A")
-            response_time_ms = int((time.monotonic() - start) * 1000)
-            return CheckResult(
-                monitor_id=self.monitor_id,
-                status="up",
-                response_time_ms=response_time_ms,
-                checked_at=checked_at,
-            )
-
+            await resolver.resolve(self.target, "A")
         except dns.resolver.NXDOMAIN:
-            response_time_ms = int((time.monotonic() - start) * 1000)
-            return CheckResult(
-                monitor_id=self.monitor_id,
-                status="down",
-                response_time_ms=response_time_ms,
-                checked_at=checked_at,
-                error_message=f"Domain {self.target!r} does not exist",
+            return self._result(
+                "down", checked_at, start, f"Domain {self.target!r} does not exist"
             )
-
-        except dns.resolver.Timeout:
-            response_time_ms = int((time.monotonic() - start) * 1000)
-            return CheckResult(
-                monitor_id=self.monitor_id,
-                status="down",
-                response_time_ms=response_time_ms,
-                checked_at=checked_at,
-                error_message=f"DNS lookup timed out after {self.timeout_seconds}s",
+        except dns.exception.Timeout:
+            return self._result(
+                "down", checked_at, start, f"DNS lookup timed out after {self.timeout_seconds}s"
             )
-
-        except Exception as e:
-            response_time_ms = int((time.monotonic() - start) * 1000)
-            return CheckResult(
-                monitor_id=self.monitor_id,
-                status="down",
-                response_time_ms=response_time_ms,
-                checked_at=checked_at,
-                error_message=str(e),
-            )
+        except dns.exception.DNSException as exc:
+            # e.g. NoAnswer, NoNameservers: report the kind of failure, not internals
+            return self._result("down", checked_at, start, f"DNS lookup failed ({type(exc).__name__})")
+        return self._result("up", checked_at, start)

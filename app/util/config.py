@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     # Webhooks
     # DEV ONLY: allows http:// and private/local targets. Must stay false in production.
     webhook_allow_private_targets: bool = False
+    # DEV ONLY: lets health checks reach localhost and private networks.
+    # Must stay false in production: otherwise any customer could make our
+    # servers fetch internal addresses (cloud metadata, admin panels).
+    monitor_allow_private_targets: bool = False
 
     # Notification channels: Fernet keys, comma-separated. The FIRST key encrypts;
     # every key can decrypt, so keys can be rotated.

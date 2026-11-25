@@ -75,8 +75,14 @@ def _literal_ip(host: str) -> str | None:
         return None
 
 
-def check_url_syntax(url: str, *, allow_private: bool = False) -> ParsedURL:
-    """Checks that need no DNS. Also usable when a channel is created or updated."""
+def check_url_syntax(
+    url: str, *, allow_private: bool = False, allow_http: bool = False
+) -> ParsedURL:
+    """Checks that need no DNS. Also usable when a channel is created or updated.
+
+    Webhooks must use https. Health checks may monitor plain http sites, so they
+    pass allow_http=True; the address checks stay the same either way.
+    """
     if not url or len(url) > MAX_URL_LENGTH:
         raise UnsafeWebhookURL("URL is empty or too long")
     if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in url):
@@ -88,9 +94,11 @@ def check_url_syntax(url: str, *, allow_private: bool = False) -> ParsedURL:
     except ValueError:
         raise UnsafeWebhookURL("URL is malformed") from None
 
-    allowed = {"http", "https"} if allow_private else {"https"}
+    allowed = {"http", "https"} if (allow_private or allow_http) else {"https"}
     if parts.scheme not in allowed:
-        raise UnsafeWebhookURL("URL must use https")
+        raise UnsafeWebhookURL(
+            "URL must use http or https" if allow_http else "URL must use https"
+        )
     if parts.username is not None or parts.password is not None:
         raise UnsafeWebhookURL("URL must not contain credentials")
 
@@ -131,13 +139,14 @@ async def resolve_safe_target(
     *,
     resolver: Resolver | None = None,
     allow_private: bool = False,
+    allow_http: bool = False,
 ) -> SafeTarget:
     """Validate the URL, resolve it, and return the IP that is safe to connect to.
 
     The request URL is rebuilt from the checked pieces, so what we send to can't
     differ from what we validated (no parser tricks, no DNS rebinding).
     """
-    parsed = check_url_syntax(url, allow_private=allow_private)
+    parsed = check_url_syntax(url, allow_private=allow_private, allow_http=allow_http)
 
     literal = _literal_ip(parsed.host)
     if literal is not None:
