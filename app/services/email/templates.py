@@ -136,3 +136,19 @@ def render_incident_resolved(ctx: IncidentEmailContext) -> RenderedEmail:
         rows=rows,
         status_page_url=ctx.status_page_url,
     )
+
+
+def render_channel_test(channel_name: str, sent_at: datetime) -> RenderedEmail:
+    """The message sent by "Test this channel": proves alerts can reach you."""
+    name = _one_line(channel_name)
+    return _build(
+        subject=f"[TEST] UpTimeTracker alerts for {name} work",
+        heading="Your alerts are set up correctly",
+        color="#2563eb",
+        rows=[
+            ("Channel", name),
+            ("Sent", _fmt_time(sent_at)),
+            ("What's next", "You will get an email like this when a monitor goes down"),
+        ],
+        status_page_url=None,
+    )
