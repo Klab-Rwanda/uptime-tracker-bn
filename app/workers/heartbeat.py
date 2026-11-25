@@ -1,20 +1,26 @@
-from datetime import UTC,datetime, timedelta
-from uuid import uuid4
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.checks.result import CheckResult
 from app.models.heartbeat import Heartbeat
 from app.models.monitor import Monitor
+from app.services.status import resolve_status
 
 
 async def save_heartbeat(
     session: AsyncSession,
     monitor: Monitor,
     result: CheckResult,
+    *,
+    now: datetime | None = None,
 ) -> Heartbeat:
+    """Store one check result and update the monitor's state, once.
+
+    This is the ONLY place the counters and status are updated (they used to be
+    updated here and in run_monitor, so every count was doubled).
+    """
     heartbeat = Heartbeat(
-        id=uuid4(),
         monitor_id=monitor.id,
         status=result.status,
         response_time_ms=result.response_time_ms,
@@ -23,19 +29,17 @@ async def save_heartbeat(
     )
     session.add(heartbeat)
 
-    is_up = result.status == "up"
-
-    if is_up:
+    # Uses the counters from BEFORE this result, so it must run first
+    monitor.current_status = resolve_status(monitor, result)
+    if result.status == "up":
         monitor.consecutive_failures = 0
         monitor.consecutive_successes += 1
-        monitor.current_status = "up"
     else:
         monitor.consecutive_failures += 1
         monitor.consecutive_successes = 0
-        monitor.current_status = "down"
 
-    now = datetime.now(UTC)
-    monitor.last_checked_at = now
+    now = now or datetime.now(UTC)
+    monitor.last_checked_at = result.checked_at
     monitor.next_check_at = now + timedelta(seconds=monitor.check_interval_seconds)
 
     await session.commit()

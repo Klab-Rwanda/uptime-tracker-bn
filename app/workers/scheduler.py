@@ -14,8 +14,10 @@ async def run_scheduler() -> None:
 
     while True:
         try:
-            async with sessionLocal() as db:
-                await run_due_monitors(db)
+            # A session factory, not one session: each monitor gets its own
+            checked = await run_due_monitors(sessionLocal)
+            if checked:
+                logger.info("monitors checked", extra={"count": checked})
         except Exception:
             logger.exception("Scheduler encountered an error")
 
