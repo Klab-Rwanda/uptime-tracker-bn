@@ -8,10 +8,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.checks.result import CheckResult
+from app.incidents.alerts import ensure_incident_alerts
 from app.incidents.history import SqlCheckHistory
 from app.incidents.service import evaluate_monitor
 from app.models.heartbeat import Heartbeat
 from app.models.monitor import Monitor
+from app.services.notifications.delivery import DeliveryStore
 from app.services.status import run_with_retry
 from app.workers.heartbeat import save_heartbeat
 
@@ -30,15 +32,19 @@ async def run_monitor(
     monitor: Monitor,
     *,
     check: CheckRunner = run_with_retry,
+    alerts: DeliveryStore | None = None,
 ) -> Heartbeat:
-    """Check one monitor, store the heartbeat, then open/resolve its incident."""
+    """Check one monitor, store the heartbeat, open/resolve its incident, and
+    queue the alerts for it (when `alerts` is given)."""
     monitor_id = monitor.id  # read before commits expire the object
     result = await check(monitor)
     heartbeat = await save_heartbeat(session, monitor, result)
     try:
-        await evaluate_monitor(session, monitor_id, SqlCheckHistory(session))
+        evaluation = await evaluate_monitor(session, monitor_id, SqlCheckHistory(session))
+        if alerts is not None:
+            await ensure_incident_alerts(session, alerts, evaluation)
     except Exception:
-        # The heartbeat is already saved; the next check evaluates again
+        # The heartbeat is already saved; the next check evaluates (and queues) again
         await session.rollback()
         logger.exception("incident evaluation failed", extra={"monitor_id": str(monitor_id)})
     return heartbeat
@@ -65,6 +71,7 @@ async def run_due_monitors(
     session_factory: async_sessionmaker[AsyncSession],
     *,
     check: CheckRunner = run_with_retry,
+    alerts: DeliveryStore | None = None,
     concurrency: int = DEFAULT_CONCURRENCY,
     now: datetime | None = None,
 ) -> int:
@@ -82,7 +89,7 @@ async def run_due_monitors(
             if monitor is None or not monitor.is_active:
                 return False  # deleted or paused since the batch was selected
             try:
-                await run_monitor(session, monitor, check=check)
+                await run_monitor(session, monitor, check=check, alerts=alerts)
             # Isolate every monitor: whatever goes wrong, the others still run
             except Exception:
                 await session.rollback()

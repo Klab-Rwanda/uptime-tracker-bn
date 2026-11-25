@@ -15,6 +15,25 @@ services:
       redis:
         condition: service_healthy
 
+  # Background workers: monitor checks, incidents, and sending alerts.
+  # Opt-in, because they run real checks and send real alerts to whatever
+  # database is in .env:  docker compose --profile worker up -d
+  worker:
+    profiles: ["worker"]
+    build:
+      context: .
+      target: dev
+    command: python -m app.workers
+    env_file: .env
+    volumes:
+      - .:/code
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   postgres:
     image: postgres:16-alpine
     environment:
