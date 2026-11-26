@@ -259,14 +259,27 @@ def _covering(monitor_ids: list[UUID], at: datetime) -> Select[UUID, Maintenance
     )
 
 
-async def monitors_in_maintenance(
-    session: AsyncSession, monitor_ids: list[UUID], at: datetime
-) -> set[UUID]:
-    """Which of these monitors are inside an active window at `at`."""
+async def windows_overlapping(
+    session: AsyncSession, monitor_ids: list[UUID], start: datetime, end: datetime
+) -> list[tuple[MaintenanceWindow, set[UUID]]]:
+    """Windows that cover any of these monitors at some point in [start, end),
+    each with the subset of `monitor_ids` it covers, earliest start first."""
     if not monitor_ids:
-        return set()
-    rows = await session.execute(_covering(monitor_ids, as_utc(at)))
-    return {monitor_id for monitor_id, _ in rows.all()}
+        return []
+    rows = await session.execute(
+        select(MaintenanceWindowMonitor.monitor_id, MaintenanceWindow)
+        .join(MaintenanceWindow, MaintenanceWindow.id == MaintenanceWindowMonitor.window_id)
+        .where(
+            MaintenanceWindowMonitor.monitor_id.in_(monitor_ids),
+            MaintenanceWindow.starts_at < as_utc(end),
+            MaintenanceWindow.ends_at > as_utc(start),
+        )
+        .order_by(MaintenanceWindow.starts_at, MaintenanceWindow.id)
+    )
+    found: dict[UUID, tuple[MaintenanceWindow, set[UUID]]] = {}
+    for monitor_id, window in rows.all():
+        found.setdefault(window.id, (window, set()))[1].add(monitor_id)
+    return list(found.values())
 
 
 async def _suppressing_window(
