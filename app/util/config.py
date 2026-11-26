@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     email_code_ttl_minutes: int = 10
     app_frontend_url: str = "http://localhost:3000"
     invitation_ttl_hours: int = 48
+    # Frontend addresses allowed to call the API from a browser, comma-separated,
+    # e.g. "http://localhost:3000,https://app.example.com". Empty: no browser access.
+    cors_origins: str = ""
 
     # Webhooks
     # DEV ONLY: allows http:// and private/local targets. Must stay false in production.
