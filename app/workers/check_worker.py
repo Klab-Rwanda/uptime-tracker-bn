@@ -58,7 +58,7 @@ async def _due_monitor_ids(
             select(Monitor.id)
             .where(
                 Monitor.is_active.is_(True),
-                Monitor.monitor_type == "http",
+                Monitor.monitor_type.in_(["http", "https", "tcp", "dns"]),
                 Monitor.next_check_at <= now,
             )
             .order_by(Monitor.next_check_at)

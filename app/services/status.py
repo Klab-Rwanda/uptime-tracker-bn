@@ -2,8 +2,11 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable
 
+from app.checks.base import BaseCheck
+from app.checks.dns_check import DNSCheck
 from app.checks.http_check import HTTPCheck
 from app.checks.result import CheckResult
+from app.checks.tcp_check import TCPCheck
 from app.models.monitor import Monitor
 from app.util.config import get_settings
 
@@ -16,15 +19,7 @@ async def run_with_retry(monitor: Monitor, *, sleep: Sleep = asyncio.sleep) -> C
     Waits retry_interval_seconds between attempts, so a struggling site isn't
     hit several times in a row. Only the final result is returned (and stored).
     """
-    check = HTTPCheck(
-        monitor_id=str(monitor.id),
-        target=monitor.target,
-        method=monitor.method or "GET",
-        expected_status_codes=_parse_status_codes(monitor.expected_status_codes),
-        keyword=monitor.keyword,
-        timeout_seconds=monitor.timeout_seconds,
-        allow_private=get_settings().monitor_allow_private_targets,
-    )
+    check = _build_check(monitor)
 
     result = await check.run()
     for _ in range(max(monitor.retry_count, 0)):
@@ -33,6 +28,42 @@ async def run_with_retry(monitor: Monitor, *, sleep: Sleep = asyncio.sleep) -> C
         await sleep(max(monitor.retry_interval_seconds, 0))
         result = await check.run()
     return result
+
+
+def _build_check(monitor: Monitor) -> BaseCheck:
+    """Pick the right check class for this monitor type."""
+    monitor_id = str(monitor.id)
+    t = monitor.monitor_type
+
+    if t in ("http", "https"):
+        return HTTPCheck(
+            monitor_id=monitor_id,
+            target=monitor.target,
+            method=monitor.method or "GET",
+            expected_status_codes=_parse_status_codes(monitor.expected_status_codes),
+            keyword=monitor.keyword,
+            timeout_seconds=monitor.timeout_seconds,
+            allow_private=get_settings().monitor_allow_private_targets,
+        )
+
+    if t == "tcp":
+        host, port_str = monitor.target.rsplit(":", 1)
+        return TCPCheck(
+            monitor_id=monitor_id,
+            host=host,
+            port=int(port_str),
+            timeout_seconds=monitor.timeout_seconds,
+        )
+
+    if t == "dns":
+        return DNSCheck(
+            monitor_id=monitor_id,
+            target=monitor.target,
+            timeout_seconds=monitor.timeout_seconds,
+        )
+
+    # Unknown type — treat as down so it shows up rather than silently doing nothing
+    raise ValueError(f"Unsupported monitor type: {t!r}")
 
 
 def resolve_status(monitor: Monitor, result: CheckResult) -> str:
