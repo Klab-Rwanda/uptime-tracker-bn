@@ -1,4 +1,6 @@
+import asyncio
 import secrets
+import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
@@ -7,6 +9,7 @@ import pytest
 import pytest_asyncio
 from cryptography.fernet import Fernet
 from httpx import ASGITransport, AsyncClient
+from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.incidents.service import acknowledge_incident, open_incident, resolve_incident
@@ -14,6 +17,7 @@ from app.main import app
 from app.models.monitor import Monitor
 from app.notification_channels.crypto import ChannelCipher
 from app.notification_channels.dependencies import get_channel_cipher
+from app.status_pages import cache
 from app.util.config import get_settings
 from app.util.database import get_db_session
 from app.util.redis import get_redis_client
@@ -25,8 +29,29 @@ T0 = datetime.now(UTC).replace(microsecond=0) - timedelta(hours=2)
 
 
 class FakeRedis:
+    """In-memory stand-in for the few Redis commands the app uses."""
+
+    def __init__(self) -> None:
+        self.data: dict[str, bytes] = {}
+        self.expiry: dict[str, int | None] = {}
+        self.calls = 0
+
     async def eval(self, *_: object) -> int:
         return 1
+
+    async def get(self, key: str) -> bytes | None:
+        self.calls += 1
+        return self.data.get(key)
+
+    async def set(self, key: str, value: bytes, ex: int | None = None) -> None:
+        self.calls += 1
+        self.data[key] = value
+        self.expiry[key] = ex
+
+    async def delete(self, *keys: str) -> None:
+        self.calls += 1
+        for key in keys:
+            self.data.pop(key, None)
 
 
 @pytest_asyncio.fixture(params=["sqlite", "postgres"])
@@ -50,10 +75,11 @@ async def env(request, tmp_path, monkeypatch) -> AsyncIterator[dict]:
             yield session
 
     app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[get_redis_client] = lambda: FakeRedis()
+    redis = FakeRedis()
+    app.dependency_overrides[get_redis_client] = lambda: redis
     app.dependency_overrides[get_channel_cipher] = lambda: ChannelCipher([Fernet.generate_key().decode()])
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        yield {"client": client, "sessions": sessions}
+        yield {"client": client, "sessions": sessions, "redis": redis}
     app.dependency_overrides.clear()
     await dispose_test_engine(engine)
     get_settings.cache_clear()
@@ -386,6 +412,7 @@ async def test_active_incidents_of_page_monitors_only(world):
 
     async with world["sessions"]() as s:
         await resolve_incident(s, investigating.id)
+    world["redis"].data.clear()  # the cache would hide the change for a few seconds
     titles = [i["title"] for i in (await public(world)).json()["data"]["active_incidents"]]
     assert titles == ["Website is down"]
 
@@ -414,3 +441,118 @@ async def test_an_unexpected_stored_status_does_not_break_the_page(world):
     resp = await public(world)
     assert resp.status_code == 200
     assert resp.json()["data"]["groups"][0]["monitors"][0]["status"] == "pending"
+
+
+# --- the public page cache --------------------------------------------------------
+
+
+class BrokenRedis(FakeRedis):
+    async def get(self, key: str) -> bytes | None:
+        raise RedisError("redis is down")
+
+    async def set(self, key: str, value: bytes, ex: int | None = None) -> None:
+        raise RedisError("redis is down")
+
+    async def delete(self, *keys: str) -> None:
+        raise RedisError("redis is down")
+
+
+class SlowRedis(FakeRedis):
+    async def get(self, key: str) -> bytes | None:
+        await asyncio.sleep(5)
+        return None
+
+    async def set(self, key: str, value: bytes, ex: int | None = None) -> None:
+        await asyncio.sleep(5)
+
+    async def delete(self, *keys: str) -> None:
+        await asyncio.sleep(5)
+
+
+def use_redis(fake: FakeRedis) -> None:
+    app.dependency_overrides[get_redis_client] = lambda: fake
+
+
+async def test_second_visit_is_served_from_the_cache(world):
+    await create_page(world)
+    await set_monitor(world, "api", status="up")
+    first = await public(world)
+    assert first.headers["x-cache"] == "MISS"
+    assert world["redis"].expiry[cache.cache_key(f"acme-{world['tag']}")] == cache.CACHE_SECONDS
+
+    # The database changes, but for a few seconds visitors get the cached copy
+    await set_monitor(world, "api", status="down")
+    second = await public(world)
+    assert second.headers["x-cache"] == "HIT"
+    assert second.json() == first.json()
+    assert second.headers["cache-control"] == "public, max-age=30"
+
+
+async def test_editing_a_page_clears_its_cache(world):
+    page = await create_page(world)
+    await public(world)
+    await world["client"].patch(
+        f"/v1/status-pages/{page['id']}", json={"title": "Renamed"}, headers=bearer(world["editor"])
+    )
+    resp = await public(world)
+    assert (resp.headers["x-cache"], resp.json()["data"]["title"]) == ("MISS", "Renamed")
+
+
+async def test_changing_the_slug_clears_the_old_address(world):
+    page = await create_page(world)
+    old = f"acme-{world['tag']}"
+    assert (await public(world, old)).status_code == 200
+    new = f"acme-moved-{world['tag']}"
+    await world["client"].patch(
+        f"/v1/status-pages/{page['id']}", json={"slug": new}, headers=bearer(world["editor"])
+    )
+    assert (await public(world, old)).status_code == 404
+    assert (await public(world, new)).status_code == 200
+
+
+async def test_deleting_a_page_clears_its_cache(world):
+    page = await create_page(world)
+    await public(world)
+    await world["client"].delete(f"/v1/status-pages/{page['id']}", headers=bearer(world["owner"]))
+    assert (await public(world)).status_code == 404
+
+
+async def test_unknown_slugs_are_cached_and_creating_the_page_clears_that(world):
+    slug = f"acme-{world['tag']}"
+    assert (await public(world, slug)).status_code == 404
+    assert world["redis"].data[cache.cache_key(slug)] == b"-"
+    assert (await public(world, slug)).status_code == 404  # answered by the cache
+
+    await create_page(world)
+    resp = await public(world, slug)
+    assert (resp.status_code, resp.headers["x-cache"]) == (200, "MISS")
+
+
+async def test_invalid_slugs_never_reach_redis(world):
+    world["redis"].calls = 0
+    assert (await public(world, "Bad Slug!")).status_code == 404
+    assert world["redis"].calls == 0
+
+
+async def test_a_broken_cache_entry_is_rebuilt(world):
+    await create_page(world)
+    world["redis"].data[cache.cache_key(f"acme-{world['tag']}")] = b'{"not": "a page"}'
+    resp = await public(world)
+    assert (resp.status_code, resp.headers["x-cache"]) == (200, "MISS")
+
+
+@pytest.mark.parametrize("fake", [BrokenRedis, SlowRedis])
+async def test_the_page_works_when_redis_is_down_or_slow(world, monkeypatch, fake):
+    monkeypatch.setattr(cache, "REDIS_TIMEOUT_SECONDS", 0.05)
+    page = await create_page(world)
+    use_redis(fake())
+
+    started = time.monotonic()
+    resp = await public(world)
+    assert (resp.status_code, resp.headers["x-cache"]) == (200, "MISS")
+    # Editing still works; the cache just could not be cleared
+    edit = await world["client"].patch(
+        f"/v1/status-pages/{page['id']}", json={"title": "Renamed"}, headers=bearer(world["editor"])
+    )
+    assert edit.status_code == 200
+    assert time.monotonic() - started < 3
