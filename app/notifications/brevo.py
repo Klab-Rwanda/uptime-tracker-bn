@@ -7,7 +7,10 @@ from email.utils import formataddr
 from html import escape
 from typing import Literal
 from urllib.parse import urlsplit
+from uuid import uuid4
 
+from app.services.email import base as api_email
+from app.services.email.brevo import BrevoEmailProvider
 from app.util.config import get_settings
 
 EmailKind = Literal["otp_code", "notification", "update", "invite"]
@@ -180,13 +183,63 @@ def _send_smtp(message: EmailMessage) -> None:
         server.send_message(message)
 
 
+async def _send_with_api(
+    message: EmailMessage, kind: EmailKind, *, recipient: str, api_key: str
+) -> None:
+    """Send through the Brevo HTTP API, the same way alert emails go out."""
+    settings = get_settings()
+    html = message.get_body(("html",))
+    text = message.get_body(("plain",))
+    if html is None or text is None:
+        raise EmailDeliveryError("Email must have a text and an HTML part")
+    provider = BrevoEmailProvider(
+        api_key=api_key,
+        sender_email=settings.brevo_sender_email,
+        sender_name=settings.brevo_sender_name,
+    )
+    try:
+        await provider.send(
+            api_email.EmailMessage(
+                to=[recipient],
+                subject=str(message["Subject"]),
+                html=html.get_content(),
+                text=text.get_content(),
+                idempotency_key=f"{kind}:{uuid4()}",
+            )
+        )
+    except api_email.EmailError as error:
+        logger.warning(
+            "Brevo API failed for email kind %s with %s", kind, type(error).__name__
+        )
+        raise EmailDeliveryError("Brevo could not deliver the email") from error
+    finally:
+        await provider.aclose()
+
+
 async def send_email(
     kind: EmailKind,
     *,
     recipient: str,
     parameters: dict[str, str],
 ) -> None:
+    """Send an account email (code, invitation...). With BREVO_API_KEY set it
+    goes through the Brevo HTTP API; otherwise through Brevo SMTP."""
     settings = get_settings()
+    api_key = settings.brevo_api_key.get_secret_value()
+    if api_key:
+        if not (settings.brevo_sender_email and settings.brevo_sender_name):
+            logger.error("Brevo sender is not configured for email kind %s", kind)
+            raise EmailDeliveryError("Brevo sender is not fully configured")
+        message = _build_message(
+            kind,
+            recipient=recipient,
+            parameters=parameters,
+            sender_email=settings.brevo_sender_email,
+            sender_name=settings.brevo_sender_name,
+        )
+        await _send_with_api(message, kind, recipient=recipient, api_key=api_key)
+        return
+
     if not all(
         (
             settings.brevo_smtp_host,
