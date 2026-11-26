@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +18,7 @@ from app.services.status_logic import (
     calculate_overall_status,
     effective_status,
 )
+from app.status_pages import cache
 from app.status_pages.models import StatusPage, StatusPageGroup, StatusPageMonitor
 from app.status_pages.schemas import (
     SLUG_RE,
@@ -175,7 +177,7 @@ async def _commit(session: AsyncSession, page: StatusPage) -> StatusPage:
 
 
 async def create_page(
-    session: AsyncSession, *, data: StatusPageCreate, current: AuthenticatedUser
+    session: AsyncSession, redis: Redis, *, data: StatusPageCreate, current: AuthenticatedUser
 ) -> StatusPage:
     require_scope(current, WRITE_SCOPE)
     role = await _membership_role(session, data.organization_id, current)
@@ -192,7 +194,9 @@ async def create_page(
         groups=_build_groups(data.groups),
     )
     session.add(page)
-    return await _commit(session, page)
+    page = await _commit(session, page)
+    await cache.forget(redis, page.slug)  # the slug may be cached as "not found"
+    return page
 
 
 async def list_pages(
@@ -215,7 +219,12 @@ async def get_page(
 
 
 async def update_page(
-    session: AsyncSession, *, page_id: UUID, data: StatusPageUpdate, current: AuthenticatedUser
+    session: AsyncSession,
+    redis: Redis,
+    *,
+    page_id: UUID,
+    data: StatusPageUpdate,
+    current: AuthenticatedUser,
 ) -> StatusPage:
     page = await _load_for(
         session,
@@ -224,6 +233,7 @@ async def update_page(
         roles=WRITE_ROLES,
         message="An editor role or higher is required to update a status page",
     )
+    old_slug = page.slug
     sent = data.model_fields_set
     for required in ("title", "slug"):
         if required in sent and getattr(data, required) is None:
@@ -249,11 +259,13 @@ async def update_page(
         page.groups.clear()
         await session.flush()
         page.groups.extend(_build_groups(data.groups))
-    return await _commit(session, page)
+    page = await _commit(session, page)
+    await cache.forget(redis, old_slug, page.slug)
+    return page
 
 
 async def delete_page(
-    session: AsyncSession, *, page_id: UUID, current: AuthenticatedUser
+    session: AsyncSession, redis: Redis, *, page_id: UUID, current: AuthenticatedUser
 ) -> None:
     page = await _load_for(
         session,
@@ -262,8 +274,10 @@ async def delete_page(
         roles=ADMIN_ROLES,
         message="An owner or administrator role is required to delete a status page",
     )
+    slug = page.slug
     await session.delete(page)
     await session.commit()
+    await cache.forget(redis, slug)
 
 
 # --- the public page (no login) -------------------------------------------------------
@@ -275,6 +289,29 @@ def _shown_status(monitor: Monitor) -> MonitorStatus:
     except ValueError:
         # An unexpected stored value must never break the public page
         return MonitorStatus.PENDING
+
+
+async def get_public_page_cached(
+    session: AsyncSession, redis: Redis, slug: str
+) -> tuple[PublicStatusPage, bool]:
+    """The public page and whether it came from the cache."""
+    slug = slug.lower()
+    if not SLUG_RE.fullmatch(slug):
+        raise page_not_found()
+    cached = await cache.read(redis, slug)
+    if isinstance(cached, PublicStatusPage):
+        return cached, True
+    if cached is cache.MISSING:
+        raise page_not_found()
+
+    try:
+        built = await get_public_page(session, slug)
+    except APIError as exc:
+        if exc.status_code == 404:
+            await cache.store_missing(redis, slug)
+        raise
+    await cache.store(redis, slug, built)
+    return built, False
 
 
 async def get_public_page(session: AsyncSession, slug: str) -> PublicStatusPage:

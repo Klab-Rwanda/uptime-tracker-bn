@@ -2,6 +2,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response, status
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import AuthenticatedUser, get_current_auth
@@ -14,23 +15,25 @@ from app.status_pages.schemas import (
     StatusPageUpdate,
 )
 from app.util.database import get_db_session
+from app.util.redis import get_redis_client
 
 router = APIRouter(prefix="/v1/status-pages", tags=["status-pages"])
 public_router = APIRouter(tags=["public status pages"])
 
 DatabaseSession = Annotated[AsyncSession, Depends(get_db_session)]
 CurrentAuth = Annotated[AuthenticatedUser, Depends(get_current_auth)]
+RedisClient = Annotated[Redis, Depends(get_redis_client)]
 
 # Visitors pile onto a status page during an outage: let browsers and proxies
-# reuse a response for a short while
+# reuse a response for a short while (the server side cache is in cache.py)
 PUBLIC_CACHE_SECONDS = 30
 
 
 @router.post("", response_model=StatusPageEnvelope, status_code=status.HTTP_201_CREATED)
 async def create_status_page(
-    request: StatusPageCreate, current: CurrentAuth, session: DatabaseSession
+    request: StatusPageCreate, current: CurrentAuth, session: DatabaseSession, redis: RedisClient
 ) -> StatusPageEnvelope:
-    page = await service.create_page(session, data=request, current=current)
+    page = await service.create_page(session, redis, data=request, current=current)
     return StatusPageEnvelope(data=service.to_response(page))
 
 
@@ -54,22 +57,31 @@ async def get_status_page(
 
 @router.patch("/{page_id}", response_model=StatusPageEnvelope)
 async def update_status_page(
-    page_id: UUID, request: StatusPageUpdate, current: CurrentAuth, session: DatabaseSession
+    page_id: UUID,
+    request: StatusPageUpdate,
+    current: CurrentAuth,
+    session: DatabaseSession,
+    redis: RedisClient,
 ) -> StatusPageEnvelope:
-    page = await service.update_page(session, page_id=page_id, data=request, current=current)
+    page = await service.update_page(
+        session, redis, page_id=page_id, data=request, current=current
+    )
     return StatusPageEnvelope(data=service.to_response(page))
 
 
 @router.delete("/{page_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
-async def delete_status_page(page_id: UUID, current: CurrentAuth, session: DatabaseSession) -> None:
-    await service.delete_page(session, page_id=page_id, current=current)
+async def delete_status_page(
+    page_id: UUID, current: CurrentAuth, session: DatabaseSession, redis: RedisClient
+) -> None:
+    await service.delete_page(session, redis, page_id=page_id, current=current)
 
 
 @public_router.get("/status/{slug}", response_model=PublicStatusPageEnvelope)
 async def public_status_page(
-    slug: str, response: Response, session: DatabaseSession
+    slug: str, response: Response, session: DatabaseSession, redis: RedisClient
 ) -> PublicStatusPageEnvelope:
     """The public status page. No login: shows only names and statuses."""
-    page = await service.get_public_page(session, slug)
+    page, from_cache = await service.get_public_page_cached(session, redis, slug)
     response.headers["Cache-Control"] = f"public, max-age={PUBLIC_CACHE_SECONDS}"
+    response.headers["X-Cache"] = "HIT" if from_cache else "MISS"
     return PublicStatusPageEnvelope(data=page)
