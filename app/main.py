@@ -16,6 +16,8 @@ from app.organizations.router import router as organizations_router
 from app.projects.router import router as projects_router
 from app.routes import health
 from app.routes.checks import router as checks_router
+from app.status_pages.router import public_router as public_status_router
+from app.status_pages.router import router as status_pages_router
 from app.util.database import dispose_engine
 from app.util.errors import register_error_handlers
 from app.util.logs import register_logging
@@ -43,6 +45,8 @@ app.include_router(invitations_router)
 app.include_router(projects_router)
 app.include_router(monitors_router)
 app.include_router(incidents_router)
+app.include_router(status_pages_router)
+app.include_router(public_status_router)
 app.include_router(notification_channels_router)
 app.include_router(api_keys_router)
 app.include_router(dashboard_router)
