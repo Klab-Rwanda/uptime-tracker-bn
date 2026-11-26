@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.api_key_access import require_scope
 from app.auth.dependencies import AuthenticatedUser
 from app.auth.errors import APIError
+from app.maintenance.service import monitors_in_maintenance
 from app.models.incident import Incident
 from app.models.monitor import Monitor
 from app.organizations.service import _get_org_membership
@@ -283,7 +284,11 @@ async def delete_page(
 # --- the public page (no login) -------------------------------------------------------
 
 
-def _shown_status(monitor: Monitor) -> MonitorStatus:
+def _shown_status(monitor: Monitor, *, in_maintenance: bool) -> MonitorStatus:
+    if not monitor.is_active:
+        return MonitorStatus.PAUSED
+    if in_maintenance:
+        return MonitorStatus.MAINTENANCE
     try:
         return effective_status(monitor.current_status, monitor.is_active)
     except ValueError:
@@ -322,12 +327,15 @@ async def get_public_page(session: AsyncSession, slug: str) -> PublicStatusPage:
     if page is None:
         raise page_not_found()
 
+    now = datetime.now(UTC)
     monitor_ids = [m.monitor_id for g in page.groups for m in g.monitors]
     monitors: dict[UUID, Monitor] = {}
     incidents: list[Incident] = []
+    in_maintenance: set[UUID] = set()
     if monitor_ids:
         rows = await session.scalars(select(Monitor).where(Monitor.id.in_(monitor_ids)))
         monitors = {m.id: m for m in rows.all()}
+        in_maintenance = await monitors_in_maintenance(session, monitor_ids, now)
         incidents = list(
             (
                 await session.scalars(
@@ -345,7 +353,12 @@ async def get_public_page(session: AsyncSession, slug: str) -> PublicStatusPage:
     every_status: list[MonitorStatus] = []
     for group in page.groups:
         shown = [
-            (monitors[m.monitor_id].name, _shown_status(monitors[m.monitor_id]))
+            (
+                monitors[m.monitor_id].name,
+                _shown_status(
+                    monitors[m.monitor_id], in_maintenance=m.monitor_id in in_maintenance
+                ),
+            )
             for m in group.monitors
             if m.monitor_id in monitors
         ]
@@ -370,6 +383,9 @@ async def get_public_page(session: AsyncSession, slug: str) -> PublicStatusPage:
                 started_at=incident.started_at,
             )
             for incident in incidents
+            # Failures during planned work are expected: the monitor shows
+            # "maintenance" instead, and its incident stays internal
+            if incident.monitor_id not in in_maintenance
         ],
-        generated_at=datetime.now(UTC),
+        generated_at=now,
     )
