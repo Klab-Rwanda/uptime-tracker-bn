@@ -8,7 +8,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.incidents.service import open_incident
+from app.incidents.service import open_incident, resolve_incident
 from app.main import app
 from app.maintenance.models import MaintenanceWindow, MaintenanceWindowMonitor
 from app.models.monitor import Monitor
@@ -390,3 +390,96 @@ async def test_a_paused_monitor_stays_paused_during_maintenance(world):
     await create(world, starts_at=iso(now - timedelta(minutes=5)), ends_at=iso(now + timedelta(hours=1)))
     data = (await world["client"].get(f"/status/{slug}")).json()["data"]
     assert data["groups"][0]["monitors"][0]["status"] == "paused"
+
+
+# --- maintenance calendar and incident history on the public page ----------------------
+
+
+async def add_window(world, name, starts_at, ends_at, keys) -> None:
+    async with world["sessions"]() as s:
+        s.add(
+            MaintenanceWindow(
+                organization_id=UUID(world["org_id"]),
+                name=name,
+                starts_at=starts_at,
+                ends_at=ends_at,
+                monitors=[MaintenanceWindowMonitor(monitor_id=UUID(world[k])) for k in keys],
+            )
+        )
+        await s.commit()
+
+
+async def add_incident(world, key, started_at, resolved_at=None) -> None:
+    async with world["sessions"]() as s:
+        monitor = await s.get(Monitor, UUID(world[key]))
+        incident, _ = await open_incident(s, monitor, started_at=started_at, cause="secret 10.0.0.5", now=started_at)
+        if resolved_at is not None:
+            await resolve_incident(s, incident.id, resolved_at=resolved_at)
+
+
+async def public_page(world, slug) -> dict:
+    resp = await world["client"].get(f"/status/{slug}")
+    assert resp.status_code == 200, resp.text
+    return resp.json()["data"]
+
+
+async def test_calendar_shows_current_and_coming_maintenance(world):
+    slug = await make_status_page(world)
+    world["db"] = await create_monitor(world["client"], world["org_id"], world["editor"], "Database")  # not on the page
+    now = datetime.now(UTC).replace(microsecond=0)
+    await add_window(world, "Now", now - timedelta(minutes=5), now + timedelta(hours=1), ["api"])
+    await add_window(world, "Tomorrow", now + timedelta(days=1), now + timedelta(days=1, hours=2), ["web", "api", "db"])
+    await add_window(world, "Too far", now + timedelta(days=20), now + timedelta(days=20, hours=1), ["api"])
+    await add_window(world, "Over", now - timedelta(days=2), now - timedelta(days=2) + timedelta(hours=1), ["api"])
+    await add_window(world, "Not on page", now + timedelta(hours=2), now + timedelta(hours=3), ["db"])
+
+    calendar = (await public_page(world, slug))["maintenance"]
+    assert [(m["name"], m["status"], m["monitors"]) for m in calendar] == [
+        ("Now", "in_progress", ["Customer API"]),
+        ("Tomorrow", "scheduled", ["Customer API", "Website"]),  # page order; Database is not on the page
+    ]
+    assert calendar[1]["starts_at"].startswith(iso(now + timedelta(days=1))[:19])
+
+
+async def test_history_lists_resolved_incidents_with_their_duration(world):
+    slug = await make_status_page(world)
+    now = datetime.now(UTC).replace(microsecond=0)
+    await add_incident(world, "api", now - timedelta(days=3), now - timedelta(days=3) + timedelta(minutes=12))
+    await add_incident(world, "web", now - timedelta(days=1), now - timedelta(days=1) + timedelta(seconds=90))
+    await add_incident(world, "api", now - timedelta(days=100), now - timedelta(days=100) + timedelta(hours=1))  # too old
+    await add_incident(world, "web", now - timedelta(minutes=10))  # still open: not history
+
+    data = await public_page(world, slug)
+    assert [(i["title"], i["duration_seconds"]) for i in data["incident_history"]] == [
+        ("Website is down", 90),
+        ("Customer API is down", 12 * 60),
+    ]
+    assert [i["title"] for i in data["active_incidents"]] == ["Website is down"]
+    assert "10.0.0.5" not in str(data)  # the cause never reaches the public
+
+
+async def test_history_leaves_out_incidents_during_maintenance(world):
+    slug = await make_status_page(world)
+    now = datetime.now(UTC).replace(microsecond=0)
+    start = now - timedelta(days=5)
+    await add_window(world, "Planned work", start, start + timedelta(hours=2), ["api"])
+    await add_incident(world, "api", start + timedelta(minutes=10), start + timedelta(minutes=40))  # during the window
+    await add_incident(world, "web", start + timedelta(minutes=10), start + timedelta(minutes=40))  # other monitor
+    await add_incident(world, "api", start + timedelta(hours=3), start + timedelta(hours=4))  # after it ended
+
+    history = (await public_page(world, slug))["incident_history"]
+    assert sorted((i["title"], i["started_at"][:16]) for i in history) == sorted([
+        ("Website is down", iso(start + timedelta(minutes=10))[:16]),
+        ("Customer API is down", iso(start + timedelta(hours=3))[:16]),
+    ])
+
+
+async def test_an_empty_page_has_no_calendar_or_history(world):
+    resp = await world["client"].post(
+        "/v1/status-pages",
+        json={"organization_id": world["org_id"], "title": "Empty", "slug": f"empty-{world['tag']}", "groups": []},
+        headers=bearer(world["editor"]),
+    )
+    assert resp.status_code == 201
+    data = await public_page(world, f"empty-{world['tag']}")
+    assert (data["maintenance"], data["incident_history"]) == ([], [])

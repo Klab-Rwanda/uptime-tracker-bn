@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from redis.asyncio import Redis
@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.api_key_access import require_scope
 from app.auth.dependencies import AuthenticatedUser
 from app.auth.errors import APIError
-from app.maintenance.service import monitors_in_maintenance
+from app.maintenance.models import MaintenanceWindow
+from app.maintenance.service import as_utc, windows_overlapping
 from app.models.incident import Incident
 from app.models.monitor import Monitor
 from app.organizations.service import _get_org_membership
@@ -27,7 +28,9 @@ from app.status_pages.schemas import (
     GroupOut,
     PublicGroup,
     PublicIncident,
+    PublicMaintenance,
     PublicMonitor,
+    PublicPastIncident,
     PublicStatusPage,
     StatusPageCreate,
     StatusPageResponse,
@@ -39,6 +42,12 @@ READ_SCOPE = "status_pages:read"
 WRITE_SCOPE = "status_pages:write"
 WRITE_ROLES = ("owner", "admin", "editor")
 ADMIN_ROLES = ("owner", "admin")
+
+# What the public page looks back on and ahead to
+HISTORY_DAYS = 90
+MAX_HISTORY = 50
+CALENDAR_DAYS = 14
+MAX_CALENDAR = 20
 
 # How visitors read an incident's status
 PUBLIC_INCIDENT_STATUS = {
@@ -319,6 +328,32 @@ async def get_public_page_cached(
     return built, False
 
 
+def _covered_at(
+    windows: list[tuple[MaintenanceWindow, set[UUID]]], monitor_id: UUID, at: datetime
+) -> bool:
+    return any(
+        monitor_id in covered and as_utc(w.starts_at) <= at < as_utc(w.ends_at)
+        for w, covered in windows
+    )
+
+
+async def _past_incidents(
+    session: AsyncSession, monitor_ids: list[UUID], since: datetime
+) -> list[Incident]:
+    result = await session.scalars(
+        select(Incident)
+        .where(
+            Incident.monitor_id.in_(monitor_ids),
+            Incident.status == IncidentStatus.RESOLVED.value,
+            Incident.started_at >= since,
+        )
+        .order_by(Incident.started_at.desc(), Incident.id)
+        # Some may be dropped below (maintenance), so read a few extra
+        .limit(MAX_HISTORY * 4)
+    )
+    return list(result.all())
+
+
 async def get_public_page(session: AsyncSession, slug: str) -> PublicStatusPage:
     slug = slug.lower()
     if not SLUG_RE.fullmatch(slug):
@@ -328,14 +363,20 @@ async def get_public_page(session: AsyncSession, slug: str) -> PublicStatusPage:
         raise page_not_found()
 
     now = datetime.now(UTC)
+    since = now - timedelta(days=HISTORY_DAYS)
     monitor_ids = [m.monitor_id for g in page.groups for m in g.monitors]
     monitors: dict[UUID, Monitor] = {}
     incidents: list[Incident] = []
-    in_maintenance: set[UUID] = set()
+    past: list[Incident] = []
+    windows: list[tuple[MaintenanceWindow, set[UUID]]] = []
     if monitor_ids:
         rows = await session.scalars(select(Monitor).where(Monitor.id.in_(monitor_ids)))
         monitors = {m.id: m for m in rows.all()}
-        in_maintenance = await monitors_in_maintenance(session, monitor_ids, now)
+        # One query serves the status (now), the calendar (ahead) and the
+        # history filter (behind)
+        windows = await windows_overlapping(
+            session, monitor_ids, since, now + timedelta(days=CALENDAR_DAYS)
+        )
         incidents = list(
             (
                 await session.scalars(
@@ -348,6 +389,8 @@ async def get_public_page(session: AsyncSession, slug: str) -> PublicStatusPage:
                 )
             ).all()
         )
+        past = await _past_incidents(session, monitor_ids, since)
+    in_maintenance = {m for m in monitor_ids if _covered_at(windows, m, now)}
 
     groups: list[PublicGroup] = []
     every_status: list[MonitorStatus] = []
@@ -372,6 +415,35 @@ async def get_public_page(session: AsyncSession, slug: str) -> PublicStatusPage:
             )
         )
 
+    calendar = [
+        PublicMaintenance(
+            name=window.name,
+            status="in_progress" if as_utc(window.starts_at) <= now else "scheduled",
+            starts_at=as_utc(window.starts_at),
+            ends_at=as_utc(window.ends_at),
+            monitors=[
+                monitors[m].name for m in monitor_ids if m in covered and m in monitors
+            ],
+        )
+        for window, covered in windows
+        if as_utc(window.ends_at) > now
+    ][:MAX_CALENDAR]
+
+    history = [
+        PublicPastIncident(
+            title=incident.title,
+            started_at=as_utc(incident.started_at),
+            resolved_at=as_utc(incident.resolved_at),
+            duration_seconds=max(
+                0, int((as_utc(incident.resolved_at) - as_utc(incident.started_at)).total_seconds())
+            ),
+        )
+        for incident in past
+        if incident.resolved_at is not None
+        # Failures during planned work were expected: keep them off the record
+        and not _covered_at(windows, incident.monitor_id, as_utc(incident.started_at))
+    ][:MAX_HISTORY]
+
     return PublicStatusPage(
         title=page.title,
         overall_status=calculate_overall_status(every_status).value,
@@ -380,12 +452,14 @@ async def get_public_page(session: AsyncSession, slug: str) -> PublicStatusPage:
             PublicIncident(
                 title=incident.title,
                 status=PUBLIC_INCIDENT_STATUS.get(incident.status, "investigating"),
-                started_at=incident.started_at,
+                started_at=as_utc(incident.started_at),
             )
             for incident in incidents
             # Failures during planned work are expected: the monitor shows
             # "maintenance" instead, and its incident stays internal
             if incident.monitor_id not in in_maintenance
         ],
+        maintenance=calendar,
+        incident_history=history,
         generated_at=now,
     )

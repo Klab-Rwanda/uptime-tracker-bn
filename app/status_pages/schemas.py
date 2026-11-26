@@ -176,11 +176,28 @@ class PublicIncident(BaseModel):
     started_at: datetime
 
 
+class PublicMaintenance(BaseModel):
+    name: str
+    status: str  # "in_progress" or "scheduled"
+    starts_at: datetime
+    ends_at: datetime
+    monitors: list[str]  # names of the affected monitors shown on this page
+
+
+class PublicPastIncident(BaseModel):
+    title: str
+    started_at: datetime
+    resolved_at: datetime
+    duration_seconds: int
+
+
 class PublicStatusPage(BaseModel):
     title: str
     overall_status: str
     groups: list[PublicGroup]
     active_incidents: list[PublicIncident]
+    maintenance: list[PublicMaintenance]
+    incident_history: list[PublicPastIncident]
     generated_at: datetime
 
 
