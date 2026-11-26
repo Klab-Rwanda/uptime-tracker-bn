@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.incidents.service import Evaluation
+from app.maintenance.service import alerts_suppressed
 from app.models.incident import Incident
 from app.models.monitor import Monitor
 from app.notification_channels.models import NotificationChannel
@@ -93,13 +94,23 @@ async def enqueue_incident_alerts(
 
     Returns how many deliveries were newly created (0 when they already exist).
     Channels that were deleted or belong to another organization are skipped:
-    alerts must never leave the incident's own tenant.
+    alerts must never leave the incident's own tenant. Planned maintenance can
+    silence alerts (see alerts_suppressed).
     """
+    now = now or datetime.now(UTC)
     monitor = await session.get(Monitor, incident.monitor_id)
     if monitor is None:
         return 0
     wanted = _channel_ids(monitor)
     if not wanted:
+        return 0
+    if await alerts_suppressed(
+        session, incident, resolved=event is AlertEvent.RESOLVED, now=now
+    ):
+        logger.info(
+            "incident alerts silenced by maintenance",
+            extra={"incident_id": str(incident.id), "event": event.value},
+        )
         return 0
 
     channels = (
@@ -117,7 +128,6 @@ async def enqueue_incident_alerts(
         )
 
     payload = build_payload(incident, monitor, event)
-    now = now or datetime.now(UTC)
     created = 0
     for channel in channels:
         _, is_new = await store.create_if_absent(

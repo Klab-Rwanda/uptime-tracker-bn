@@ -17,6 +17,7 @@ from app.incidents.alerts import (
     ensure_incident_alerts,
 )
 from app.incidents.service import Evaluation, open_incident, resolve_incident
+from app.maintenance.models import MaintenanceWindow, MaintenanceWindowMonitor
 from app.models.monitor import Monitor
 from app.notification_channels.crypto import ChannelCipher
 from app.notification_channels.models import NotificationChannel
@@ -341,3 +342,100 @@ async def test_alerts_are_sent_only_once(sessions, store, world, fakes):
     assert len(fakes["email"].sent) == 1
     assert len(fakes["webhook"].sent) == 1
     assert await store.list_due(now=T0 + timedelta(days=1)) == []  # nothing left to send
+
+
+# --- maintenance windows silence alerts -----------------------------------------------------
+
+
+async def add_window(sessions, world, starts_at, ends_at, *, suppress=True, monitor_id=None):
+    async with sessions() as s:
+        window = MaintenanceWindow(
+            organization_id=world["org_a"],
+            name="Database upgrade",
+            starts_at=starts_at,
+            ends_at=ends_at,
+            suppress_notifications=suppress,
+            monitors=[MaintenanceWindowMonitor(monitor_id=monitor_id or world["monitor"])],
+        )
+        s.add(window)
+        await s.commit()
+
+
+async def test_opened_alert_waits_until_maintenance_ends(sessions, store, world):
+    await add_window(sessions, world, T0 - timedelta(minutes=10), T0 + timedelta(hours=1))
+    incident = await open_now(sessions, world)
+    async with sessions() as s:
+        during = await enqueue_incident_alerts(s, store, incident, AlertEvent.OPENED, now=T0)
+        # Still down after the window: the next check queues the alert after all
+        after = await enqueue_incident_alerts(
+            s, store, incident, AlertEvent.OPENED, now=T0 + timedelta(hours=1)
+        )
+    assert (during, after) == (0, 2)
+
+
+async def test_window_without_suppression_still_alerts(sessions, store, world):
+    await add_window(sessions, world, T0 - timedelta(minutes=10), T0 + timedelta(hours=1), suppress=False)
+    incident = await open_now(sessions, world)
+    async with sessions() as s:
+        assert await enqueue_incident_alerts(s, store, incident, AlertEvent.OPENED, now=T0) == 2
+
+
+async def test_window_of_another_monitor_does_not_silence(sessions, store, world):
+    async with sessions() as s:
+        other = Monitor(
+            organization_id=world["org_a"], name="Website", monitor_type="http",
+            target="https://acme.com", check_interval_seconds=60,
+        )
+        s.add(other)
+        await s.commit()
+    await add_window(sessions, world, T0 - timedelta(minutes=10), T0 + timedelta(hours=1), monitor_id=other.id)
+    incident = await open_now(sessions, world)
+    async with sessions() as s:
+        assert await enqueue_incident_alerts(s, store, incident, AlertEvent.OPENED, now=T0) == 2
+
+
+async def test_incident_inside_one_window_sends_nothing(sessions, store, world):
+    await add_window(sessions, world, T0 - timedelta(minutes=10), T0 + timedelta(hours=1))
+    incident = await open_now(sessions, world)
+    async with sessions() as s:
+        resolved = await resolve_incident(s, incident.id, resolved_at=T0 + timedelta(minutes=20))
+        assert await enqueue_incident_alerts(
+            s, store, resolved, AlertEvent.RESOLVED, now=T0 + timedelta(minutes=20)
+        ) == 0
+    assert await queued(store) == []
+
+
+async def test_outage_before_the_window_still_gets_its_resolved_alert(sessions, store, world):
+    incident = await open_now(sessions, world)  # starts at T0, before any maintenance
+    async with sessions() as s:
+        await enqueue_incident_alerts(s, store, incident, AlertEvent.OPENED, now=T0)
+    await add_window(sessions, world, T0 + timedelta(minutes=5), T0 + timedelta(hours=1))
+    async with sessions() as s:
+        resolved = await resolve_incident(s, incident.id, resolved_at=T0 + timedelta(minutes=20))
+        sent = await enqueue_incident_alerts(
+            s, store, resolved, AlertEvent.RESOLVED, now=T0 + timedelta(minutes=20)
+        )
+    assert sent == 2  # people heard "opened", so they must hear "resolved"
+
+
+async def test_outage_that_outlasts_the_window_gets_both_alerts(sessions, store, world):
+    await add_window(sessions, world, T0 - timedelta(minutes=10), T0 + timedelta(minutes=30))
+    incident = await open_now(sessions, world)
+    later = T0 + timedelta(hours=2)
+    async with sessions() as s:
+        await enqueue_incident_alerts(s, store, incident, AlertEvent.OPENED, now=T0)
+        await enqueue_incident_alerts(s, store, incident, AlertEvent.OPENED, now=later)
+        resolved = await resolve_incident(s, incident.id, resolved_at=later)
+        await enqueue_incident_alerts(s, store, resolved, AlertEvent.RESOLVED, now=later)
+    events = sorted(r.payload["event"] for r in await queued(store))
+    assert events == ["opened", "opened", "resolved", "resolved"]
+
+
+async def test_worker_sends_nothing_for_an_outage_during_maintenance(sessions, store, world):
+    real_now = datetime.now(UTC)  # the worker checks maintenance against the real clock
+    await add_window(sessions, world, real_now - timedelta(hours=1), real_now + timedelta(hours=1))
+    checks = ScriptedChecks("down", "down", "down", "up")
+    checks.clock = real_now - timedelta(minutes=30)  # the whole outage inside the window
+    for _ in range(4):
+        await run_check(sessions, store, world, checks)
+    assert await queued(store) == []
