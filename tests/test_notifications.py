@@ -5,6 +5,8 @@ from typing import ClassVar, Self
 import pytest
 
 from app.notifications.brevo import EmailDeliveryError, EmailKind, send_email
+from app.services.email.base import EmailMessage as ApiEmailMessage
+from app.services.email.base import PermanentEmailError, SendResult
 from app.util.config import get_settings
 
 pytestmark = pytest.mark.asyncio
@@ -52,6 +54,8 @@ def configured_brevo(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("BREVO_SMTP_KEY", "test-smtp-key")
     monkeypatch.setenv("BREVO_SENDER_EMAIL", "noreply@example.com")
     monkeypatch.setenv("BREVO_SENDER_NAME", "UpTimeTracker")
+    # No API key: these tests use SMTP even if a developer's .env has one
+    monkeypatch.setenv("BREVO_API_KEY", "")
     get_settings.cache_clear()
     FakeSMTP.instances.clear()
     monkeypatch.setattr("app.notifications.brevo.smtplib.SMTP", FakeSMTP)
@@ -149,3 +153,71 @@ async def test_rejects_invalid_invite_url_before_sending(
         )
 
     assert not FakeSMTP.instances
+
+
+# --- sending through the Brevo HTTP API ---------------------------------------------
+
+
+class FakeApiProvider:
+    sent: ClassVar[list[ApiEmailMessage]] = []
+    closed: ClassVar[int] = 0
+    fail_with: ClassVar[Exception | None] = None
+
+    def __init__(self, api_key: str, sender_email: str, sender_name: str) -> None:
+        self.settings = (api_key, sender_email, sender_name)
+
+    async def send(self, message: ApiEmailMessage) -> SendResult:
+        if self.fail_with is not None:
+            raise self.fail_with
+        self.sent.append(message)
+        return SendResult(provider="brevo", message_id="msg-1")
+
+    async def aclose(self) -> None:
+        FakeApiProvider.closed += 1
+
+
+@pytest.fixture
+def api_brevo(configured_brevo: None, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("BREVO_API_KEY", "test-api-key")
+    monkeypatch.setenv("BREVO_SMTP_LOGIN", "")  # SMTP is not set up at all
+    monkeypatch.setenv("BREVO_SMTP_KEY", "")
+    get_settings.cache_clear()
+    FakeApiProvider.sent.clear()
+    FakeApiProvider.closed = 0
+    FakeApiProvider.fail_with = None
+    monkeypatch.setattr("app.notifications.brevo.BrevoEmailProvider", FakeApiProvider)
+    yield
+
+
+async def test_with_an_api_key_the_otp_email_goes_through_the_api(api_brevo: None) -> None:
+    await send_email(
+        "otp_code",
+        recipient="ada@example.com",
+        parameters={"otp_code": "123456", "action": "verify your email", "expires_in_minutes": "10", "to_name": "Ada"},
+    )
+    [message] = FakeApiProvider.sent
+    assert message.to == ["ada@example.com"]
+    assert message.subject == "Your UpTimeTracker verification code"
+    assert "123456" in message.html and "123456" in message.text
+    assert message.idempotency_key.startswith("otp_code:")
+    assert FakeSMTP.instances == []  # SMTP was not used
+    assert FakeApiProvider.closed == 1
+
+
+async def test_api_failures_become_delivery_errors(api_brevo: None) -> None:
+    FakeApiProvider.fail_with = PermanentEmailError("Brevo rejected the request (401)")
+    with pytest.raises(EmailDeliveryError):
+        await send_email(
+            "notification", recipient="ada@example.com", parameters={"title": "Hi", "message": "Body"}
+        )
+    assert FakeApiProvider.closed == 1
+
+
+async def test_api_needs_a_sender(api_brevo: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BREVO_SENDER_EMAIL", "")
+    get_settings.cache_clear()
+    with pytest.raises(EmailDeliveryError):
+        await send_email(
+            "notification", recipient="ada@example.com", parameters={"title": "Hi", "message": "Body"}
+        )
+    assert FakeApiProvider.sent == []

@@ -168,3 +168,14 @@ class ChannelEnvelope(BaseModel):
 
 class ChannelListEnvelope(BaseModel):
     data: list[ChannelResponse]
+
+
+class ChannelTestResponse(BaseModel):
+    status: Literal["sent", "failed"]
+    detail: str | None  # why it failed, safe to show
+    provider_message_id: str | None
+    sent_at: datetime
+
+
+class ChannelTestEnvelope(BaseModel):
+    data: ChannelTestResponse

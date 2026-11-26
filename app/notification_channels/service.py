@@ -3,6 +3,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +21,14 @@ from app.notification_channels.schemas import (
     normalize_config,
     summarize_config,
 )
+from app.notification_channels.testing import (
+    ChannelTestResult,
+    enforce_test_rate_limit,
+    send_test_notification,
+)
 from app.organizations.service import _get_org_membership
+from app.services.email.base import EmailProvider
+from app.services.webhook.base import WebhookSender
 from app.services.webhook.signing import generate_secret
 from app.util.config import get_settings
 
@@ -266,6 +274,37 @@ async def update_channel(
         raise _name_conflict() from exc
     await session.refresh(channel)
     return channel, new_secret
+
+
+async def test_channel(
+    session: AsyncSession,
+    *,
+    channel_id: UUID,
+    current: AuthenticatedUser,
+    cipher: ChannelCipher,
+    redis: Redis,
+    email_provider: EmailProvider | None,
+    webhook_sender: WebhookSender | None,
+) -> ChannelTestResult:
+    """Send one test message through the channel (editor or higher).
+
+    Access is checked before the rate limit, so someone outside the
+    organization can't use up a channel's tests.
+    """
+    require_scope(current, WRITE_SCOPE)
+    channel = await _get_channel(session, channel_id)
+    await _require_role(
+        session,
+        organization_id=channel.organization_id,
+        user_id=current.user.id,
+        roles=WRITE_ROLES,
+        message="An editor role or higher is required to test a notification channel",
+    )
+    config = _load_or_409(channel, cipher)
+    await enforce_test_rate_limit(redis, channel.id)
+    return await send_test_notification(
+        channel, config, email_provider=email_provider, webhook_sender=webhook_sender
+    )
 
 
 def _without_channel(raw: str | None, channel_id: str) -> str | None:

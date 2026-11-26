@@ -8,6 +8,8 @@ from app.api_keys.router import router as api_keys_router
 from app.auth.errors import APIError
 from app.auth.router import router as auth_router
 from app.dashboard.router import router as dashboard_router
+from app.incidents.router import router as incidents_router
+from app.maintenance.router import router as maintenance_router
 from app.monitors.router import router as monitors_router
 from app.notification_channels.router import router as notification_channels_router
 from app.organizations.router import invitations_router
@@ -15,6 +17,8 @@ from app.organizations.router import router as organizations_router
 from app.projects.router import router as projects_router
 from app.routes import health
 from app.routes.checks import router as checks_router
+from app.status_pages.router import public_router as public_status_router
+from app.status_pages.router import router as status_pages_router
 from app.util.database import dispose_engine
 from app.util.errors import register_error_handlers
 from app.util.logs import register_logging
@@ -41,6 +45,10 @@ app.include_router(organizations_router)
 app.include_router(invitations_router)
 app.include_router(projects_router)
 app.include_router(monitors_router)
+app.include_router(incidents_router)
+app.include_router(maintenance_router)
+app.include_router(status_pages_router)
+app.include_router(public_status_router)
 app.include_router(notification_channels_router)
 app.include_router(api_keys_router)
 app.include_router(dashboard_router)

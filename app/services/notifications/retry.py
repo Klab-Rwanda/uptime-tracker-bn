@@ -70,8 +70,16 @@ def _clip(text: str) -> str:
     return " ".join(text.split())[:MAX_ERROR_LENGTH]
 
 
+class PermanentDeliveryError(Exception):
+    """A delivery that can never succeed: the channel was deleted, belongs to
+    another organization, or its stored configuration can't be read.
+
+    The message is stored and shown to users, so it must not contain secrets.
+    """
+
+
 _RETRYABLE = (RetryableEmailError, RetryableWebhookError)
-_PERMANENT = (PermanentEmailError, PermanentWebhookError)
+_PERMANENT = (PermanentEmailError, PermanentWebhookError, PermanentDeliveryError)
 
 
 def classify_failure(exc: BaseException) -> Failure:
