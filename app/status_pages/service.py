@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -23,7 +24,6 @@ from app.services.status_logic import (
 from app.status_pages import cache
 from app.status_pages.models import StatusPage, StatusPageGroup, StatusPageMonitor
 from app.status_pages.schemas import (
-    SLUG_RE,
     GroupIn,
     GroupOut,
     PublicGroup,
@@ -42,6 +42,10 @@ READ_SCOPE = "status_pages:read"
 WRITE_SCOPE = "status_pages:write"
 WRITE_ROLES = ("owner", "admin", "editor")
 ADMIN_ROLES = ("owner", "admin")
+
+# Any slug that may be stored: new slugs are at most 63 characters, but pages
+# made before that rule can have 64, and must stay reachable
+STORED_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,62}[a-z0-9])$")
 
 # What the public page looks back on and ahead to
 HISTORY_DAYS = 90
@@ -143,20 +147,12 @@ async def _check_monitors(
         )
 
 
-async def _check_unique(
-    session: AsyncSession, *, slug: str | None, domain: str | None, exclude: UUID | None
-) -> None:
-    for column, value, what in (
-        (StatusPage.slug, slug, "slug"),
-        (StatusPage.custom_domain, domain, "custom domain"),
-    ):
-        if value is None:
-            continue
-        stmt = select(StatusPage.id).where(column == value)
-        if exclude is not None:
-            stmt = stmt.where(StatusPage.id != exclude)
-        if await session.scalar(stmt) is not None:
-            raise APIError(409, "conflict", f"This {what} is already taken")
+async def _check_slug_free(session: AsyncSession, slug: str, *, exclude: UUID | None) -> None:
+    stmt = select(StatusPage.id).where(StatusPage.slug == slug)
+    if exclude is not None:
+        stmt = stmt.where(StatusPage.id != exclude)
+    if await session.scalar(stmt) is not None:
+        raise APIError(409, "conflict", "This slug is already taken")
 
 
 def _build_groups(groups: list[GroupIn]) -> list[StatusPageGroup]:
@@ -178,7 +174,7 @@ async def _commit(session: AsyncSession, page: StatusPage) -> StatusPage:
         await session.commit()
     except IntegrityError as exc:  # two requests took the same slug/domain at once
         await session.rollback()
-        raise APIError(409, "conflict", "This slug or custom domain is already taken") from exc
+        raise APIError(409, "conflict", "This slug is already taken") from exc
     await session.refresh(page)
     return page
 
@@ -194,13 +190,12 @@ async def create_page(
     if role not in WRITE_ROLES:
         raise APIError(403, "forbidden", "An editor role or higher is required to create a status page")
     await _check_monitors(session, data.organization_id, data.groups)
-    await _check_unique(session, slug=data.slug, domain=data.custom_domain, exclude=None)
+    await _check_slug_free(session, data.slug, exclude=None)
 
     page = StatusPage(
         organization_id=data.organization_id,
         title=data.title,
         slug=data.slug,
-        custom_domain=data.custom_domain,
         groups=_build_groups(data.groups),
     )
     session.add(page)
@@ -249,12 +244,8 @@ async def update_page(
         if required in sent and getattr(data, required) is None:
             raise APIError(422, "validation_error", f"{required} cannot be empty")
 
-    await _check_unique(
-        session,
-        slug=data.slug if "slug" in sent else None,
-        domain=data.custom_domain if "custom_domain" in sent else None,
-        exclude=page.id,
-    )
+    if data.slug is not None:
+        await _check_slug_free(session, data.slug, exclude=page.id)
     if data.groups is not None:
         await _check_monitors(session, page.organization_id, data.groups)
 
@@ -262,8 +253,8 @@ async def update_page(
         page.title = data.title
     if data.slug is not None:
         page.slug = data.slug
-    if "custom_domain" in sent:
-        page.custom_domain = data.custom_domain
+    if "custom_domain" in sent:  # only null gets this far: it removes an old domain
+        page.custom_domain = None
     if data.groups is not None:
         # Remove the old groups first, so their positions are free again
         page.groups.clear()
@@ -310,7 +301,7 @@ async def get_public_page_cached(
 ) -> tuple[PublicStatusPage, bool]:
     """The public page and whether it came from the cache."""
     slug = slug.lower()
-    if not SLUG_RE.fullmatch(slug):
+    if not STORED_SLUG_RE.fullmatch(slug):
         raise page_not_found()
     cached = await cache.read(redis, slug)
     if isinstance(cached, PublicStatusPage):
@@ -356,7 +347,7 @@ async def _past_incidents(
 
 async def get_public_page(session: AsyncSession, slug: str) -> PublicStatusPage:
     slug = slug.lower()
-    if not SLUG_RE.fullmatch(slug):
+    if not STORED_SLUG_RE.fullmatch(slug):
         raise page_not_found()
     page = await session.scalar(select(StatusPage).where(StatusPage.slug == slug))
     if page is None:
