@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import AuthenticatedUser, get_current_auth
+from app.auth.dependencies import AuthenticatedUser, scoped
 from app.monitors import service
 from app.monitors.schemas import (
     MonitorCreate,
@@ -21,7 +21,8 @@ from app.util.database import get_db_session
 router = APIRouter(prefix="/v1/monitors", tags=["monitors"])
 
 DatabaseSession = Annotated[AsyncSession, Depends(get_db_session)]
-CurrentAuth = Annotated[AuthenticatedUser, Depends(get_current_auth)]
+MonitorsRead = Annotated[AuthenticatedUser, Depends(scoped("monitors:read"))]
+MonitorsWrite = Annotated[AuthenticatedUser, Depends(scoped("monitors:write"))]
 
 
 @router.post(
@@ -31,7 +32,7 @@ CurrentAuth = Annotated[AuthenticatedUser, Depends(get_current_auth)]
 )
 async def create_monitor(
     request: MonitorCreate,
-    current: CurrentAuth,
+    current: MonitorsWrite,
     session: DatabaseSession,
 ) -> MonitorEnvelope:
     monitor = await service.create_monitor(
@@ -45,7 +46,7 @@ async def create_monitor(
 @router.get("", response_model=MonitorListEnvelope)
 async def list_monitors(
     organization_id: Annotated[UUID, Query(description="Organization ID to filter monitors")],
-    current: CurrentAuth,
+    current: MonitorsRead,
     session: DatabaseSession,
     project_id: Annotated[UUID | None, Query(description="Project ID to filter monitors")] = None,
     status: Annotated[str | None, Query(description="Status to filter monitors (e.g. pending, up, down, paused)")] = None,
@@ -67,7 +68,7 @@ async def list_monitors(
 @router.get("/{monitor_id}", response_model=MonitorEnvelope)
 async def get_monitor(
     monitor_id: UUID,
-    current: CurrentAuth,
+    current: MonitorsRead,
     session: DatabaseSession,
 ) -> MonitorEnvelope:
     monitor = await service.get_monitor(
@@ -82,7 +83,7 @@ async def get_monitor(
 async def update_monitor(
     monitor_id: UUID,
     request: MonitorUpdate,
-    current: CurrentAuth,
+    current: MonitorsWrite,
     session: DatabaseSession,
 ) -> MonitorEnvelope:
     monitor = await service.update_monitor(
@@ -97,7 +98,7 @@ async def update_monitor(
 @router.delete("/{monitor_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_monitor(
     monitor_id: UUID,
-    current: CurrentAuth,
+    current: MonitorsWrite,
     session: DatabaseSession,
 ) -> Response:
     await service.delete_monitor(
@@ -111,7 +112,7 @@ async def delete_monitor(
 @router.post("/{monitor_id}/pause", response_model=MonitorStatusEnvelope)
 async def pause_monitor(
     monitor_id: UUID,
-    current: CurrentAuth,
+    current: MonitorsWrite,
     session: DatabaseSession,
 ) -> MonitorStatusEnvelope:
     monitor = await service.pause_monitor(
@@ -131,7 +132,7 @@ async def pause_monitor(
 @router.post("/{monitor_id}/resume", response_model=MonitorStatusEnvelope)
 async def resume_monitor(
     monitor_id: UUID,
-    current: CurrentAuth,
+    current: MonitorsWrite,
     session: DatabaseSession,
 ) -> MonitorStatusEnvelope:
     monitor = await service.resume_monitor(
@@ -151,7 +152,7 @@ async def resume_monitor(
 @router.post("/{monitor_id}/test", response_model=MonitorTestEnvelope)
 async def test_monitor(
     monitor_id: UUID,
-    current: CurrentAuth,
+    current: MonitorsWrite,
     session: DatabaseSession,
 ) -> MonitorTestEnvelope:
     result = await service.test_monitor(

@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import AuthenticatedUser, get_current_auth
+from app.auth.dependencies import AuthenticatedUser, scoped
 from app.projects import service
 from app.projects.models import Project
 from app.projects.schemas import (
@@ -19,7 +19,8 @@ from app.util.database import get_db_session
 router = APIRouter(prefix="/v1/projects", tags=["projects"])
 
 DatabaseSession = Annotated[AsyncSession, Depends(get_db_session)]
-CurrentAuth = Annotated[AuthenticatedUser, Depends(get_current_auth)]
+ProjectsRead = Annotated[AuthenticatedUser, Depends(scoped("projects:read"))]
+ProjectsWrite = Annotated[AuthenticatedUser, Depends(scoped("projects:write"))]
 
 
 def _project_response(project: Project) -> ProjectResponse:
@@ -39,7 +40,7 @@ def _project_response(project: Project) -> ProjectResponse:
 )
 async def create_project(
     request: ProjectCreate,
-    current: CurrentAuth,
+    current: ProjectsWrite,
     session: DatabaseSession,
 ) -> ProjectEnvelope:
     project = await service.create_project(
@@ -54,7 +55,7 @@ async def create_project(
 @router.get("", response_model=ProjectListEnvelope)
 async def list_projects(
     organization_id: Annotated[UUID, Query(description="Organization ID to filter projects")],
-    current: CurrentAuth,
+    current: ProjectsRead,
     session: DatabaseSession,
 ) -> ProjectListEnvelope:
     projects = await service.list_projects(
@@ -70,7 +71,7 @@ async def list_projects(
 @router.get("/{project_id}", response_model=ProjectEnvelope)
 async def get_project(
     project_id: UUID,
-    current: CurrentAuth,
+    current: ProjectsRead,
     session: DatabaseSession,
 ) -> ProjectEnvelope:
     project = await service.get_project(
@@ -85,7 +86,7 @@ async def get_project(
 async def update_project(
     project_id: UUID,
     request: ProjectUpdate,
-    current: CurrentAuth,
+    current: ProjectsWrite,
     session: DatabaseSession,
 ) -> ProjectEnvelope:
     project = await service.update_project(
@@ -100,7 +101,7 @@ async def update_project(
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project(
     project_id: UUID,
-    current: CurrentAuth,
+    current: ProjectsWrite,
     session: DatabaseSession,
 ) -> Response:
     await service.delete_project(
