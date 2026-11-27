@@ -22,6 +22,8 @@ from app.services.email.templates import (
 )
 from app.services.notifications.delivery import DeliveryRecord
 from app.services.notifications.retry import PermanentDeliveryError
+from app.services.slack.messages import incident_message
+from app.services.slack.sender import SlackSender
 from app.services.webhook.base import WebhookEvent, WebhookSender
 
 # The incident fields a webhook receiver gets (never secrets or internal state)
@@ -53,11 +55,13 @@ class ChannelDeliverySender:
         cipher: ChannelCipher,
         email_provider: EmailProvider | None = None,
         webhook_sender: WebhookSender | None = None,
+        slack_sender: SlackSender | None = None,
     ) -> None:
         self._sessions = session_factory
         self._cipher = cipher
         self._email = email_provider
         self._webhook = webhook_sender
+        self._slack = slack_sender
 
     async def __call__(self, record: DeliveryRecord) -> str | None:
         payload = record.payload
@@ -74,6 +78,8 @@ class ChannelDeliverySender:
             return await self._send_email(record, config)
         if channel.channel_type == "webhook":
             return await self._send_webhook(record, config)
+        if channel.channel_type == "slack":
+            return await self._send_slack(record, config)
         raise PermanentDeliveryError("Unsupported notification channel type")
 
     async def _load_channel(self, channel_id: str) -> NotificationChannel:
@@ -139,3 +145,12 @@ class ChannelDeliverySender:
         )
         result = await self._webhook.send(url, secret, event)
         return f"http-{result.status_code}"
+
+    async def _send_slack(self, record: DeliveryRecord, config: dict[str, Any]) -> str | None:
+        if self._slack is None:
+            raise PermanentDeliveryError("Slack delivery is not configured")
+        url = config.get("webhook_url")
+        if not isinstance(url, str) or not url:
+            raise PermanentDeliveryError("Notification channel configuration can't be read")
+        status = await self._slack.send(url, incident_message(record.payload))
+        return f"slack-{status}"

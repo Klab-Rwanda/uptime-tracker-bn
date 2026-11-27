@@ -11,6 +11,7 @@ from app.notification_channels.crypto import ChannelCipher
 from app.notification_channels.dependencies import (
     get_channel_cipher,
     get_test_email_provider,
+    get_test_slack_sender,
     get_test_webhook_sender,
 )
 from app.notification_channels.schemas import (
@@ -22,6 +23,7 @@ from app.notification_channels.schemas import (
     ChannelUpdate,
 )
 from app.services.email.base import EmailProvider
+from app.services.slack.sender import SlackSender
 from app.services.webhook.base import WebhookSender
 from app.util.database import get_db_session
 from app.util.redis import get_redis_client
@@ -34,6 +36,7 @@ Cipher = Annotated[ChannelCipher, Depends(get_channel_cipher)]
 RedisClient = Annotated[Redis, Depends(get_redis_client)]
 TestEmail = Annotated[EmailProvider | None, Depends(get_test_email_provider)]
 TestWebhook = Annotated[WebhookSender, Depends(get_test_webhook_sender)]
+TestSlack = Annotated[SlackSender, Depends(get_test_slack_sender)]
 
 
 @router.post("/{channel_id}/test", response_model=ChannelTestEnvelope)
@@ -45,6 +48,7 @@ async def test_channel(
     redis: RedisClient,
     email_provider: TestEmail,
     webhook_sender: TestWebhook,
+    slack_sender: TestSlack,
 ) -> ChannelTestEnvelope:
     """Send one test message now. A delivery problem is reported in the result
     ("failed" plus a reason), not as an error status."""
@@ -56,6 +60,7 @@ async def test_channel(
         redis=redis,
         email_provider=email_provider,
         webhook_sender=webhook_sender,
+        slack_sender=slack_sender,
     )
     return ChannelTestEnvelope(
         data=ChannelTestResponse(

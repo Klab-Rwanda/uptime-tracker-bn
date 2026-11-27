@@ -8,6 +8,8 @@ from app.notification_channels.crypto import (
 )
 from app.services.email import get_email_provider
 from app.services.email.base import EmailProvider
+from app.services.slack import get_slack_sender
+from app.services.slack.sender import SlackSender
 from app.services.webhook import get_webhook_sender
 from app.services.webhook.base import WebhookSender
 
@@ -25,6 +27,10 @@ def get_test_email_provider() -> EmailProvider | None:
 
 def get_test_webhook_sender() -> WebhookSender:
     return get_webhook_sender()
+
+
+def get_test_slack_sender() -> SlackSender:
+    return get_slack_sender()
 
 
 def get_channel_cipher() -> ChannelCipher:

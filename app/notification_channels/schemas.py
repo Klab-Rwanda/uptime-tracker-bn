@@ -14,6 +14,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.services.slack.sender import check_slack_url
 from app.services.webhook.url_safety import (
     UnsafeWebhookURL,
     check_url_syntax,
@@ -23,7 +24,7 @@ from app.util.config import get_settings
 
 # Validators raise ValueError even for wrong types (ruff TRY004 suggests TypeError):
 # pydantic only turns ValueError into a 422; a TypeError would be a 500.
-ChannelType = Literal["webhook", "email"]
+ChannelType = Literal["webhook", "email", "slack"]
 MAX_EMAIL_RECIPIENTS = 10
 MAX_EMAIL_LENGTH = 254
 _EMAIL_RE = re.compile(r"[^@\s<>,;\"'\\]+@[^@\s<>,;\"'\\]+\.[^@\s<>,;\"'\\]+")
@@ -82,6 +83,15 @@ def _normalize_email(config: dict[str, Any]) -> dict[str, Any]:
     return {"recipients": recipients}
 
 
+def _normalize_slack(config: dict[str, Any]) -> dict[str, Any]:
+    if set(config) - {"webhook_url"}:
+        raise ValueError("Unknown setting for a Slack channel")
+    url = config.get("webhook_url")
+    if not isinstance(url, str):
+        raise ValueError("webhook_url is required")  # noqa: TRY004
+    return {"webhook_url": check_slack_url(url)}
+
+
 def normalize_config(
     channel_type: str, config: dict[str, Any], *, allow_private: bool = False
 ) -> dict[str, Any]:
@@ -90,12 +100,14 @@ def normalize_config(
         return _normalize_webhook(config, allow_private)
     if channel_type == "email":
         return _normalize_email(config)
+    if channel_type == "slack":
+        return _normalize_slack(config)
     raise ValueError("Unsupported channel type")
 
 
 def summarize_config(channel_type: str, config: dict[str, Any]) -> dict[str, Any]:
     """The only part of a config that API responses may show."""
-    if channel_type == "webhook":
+    if channel_type in ("webhook", "slack"):
         # Webhook URLs often carry a secret token in the path, so show the host only
         return {"url_host": urlsplit(str(config.get("webhook_url", ""))).hostname or ""}
     if channel_type == "email":

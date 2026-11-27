@@ -1,13 +1,14 @@
 import json
 import logging
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.service import record
 from app.auth.api_key_access import require_scope
 from app.auth.dependencies import AuthenticatedUser
 from app.auth.errors import APIError
@@ -28,6 +29,7 @@ from app.notification_channels.testing import (
 )
 from app.organizations.service import _get_org_membership
 from app.services.email.base import EmailProvider
+from app.services.slack.sender import SlackSender
 from app.services.webhook.base import WebhookSender
 from app.services.webhook.signing import generate_secret
 from app.util.config import get_settings
@@ -168,6 +170,7 @@ async def create_channel(
         config["secret"] = signing_secret
 
     channel = NotificationChannel(
+        id=uuid4(),
         organization_id=data.organization_id,
         name=data.name,
         channel_type=data.type,
@@ -175,6 +178,15 @@ async def create_channel(
         created_by_user_id=current.user.id,
     )
     session.add(channel)
+    record(
+        session,
+        current,
+        organization_id=channel.organization_id,
+        action="notification_channel.created",
+        target_type="notification_channel",
+        target_id=channel.id,
+        details={"name": channel.name, "type": channel.channel_type},
+    )
     try:
         await session.commit()
     except IntegrityError as exc:  # two requests created the same name at once
@@ -267,6 +279,19 @@ async def update_channel(
                 raise APIError(422, "validation_error", "config is required")
             channel.config_encrypted = cipher.encrypt(new_config)
 
+    record(
+        session,
+        current,
+        organization_id=channel.organization_id,
+        action="notification_channel.updated",
+        target_type="notification_channel",
+        target_id=channel.id,
+        # Which fields changed, never their values: configs hold secrets
+        details={
+            "fields": [f for f in ("name", "config") if getattr(data, f) is not None],
+            "secret_rotated": data.rotate_secret,
+        },
+    )
     try:
         await session.commit()
     except IntegrityError as exc:
@@ -285,6 +310,7 @@ async def test_channel(
     redis: Redis,
     email_provider: EmailProvider | None,
     webhook_sender: WebhookSender | None,
+    slack_sender: SlackSender | None = None,
 ) -> ChannelTestResult:
     """Send one test message through the channel (editor or higher).
 
@@ -303,7 +329,11 @@ async def test_channel(
     config = _load_or_409(channel, cipher)
     await enforce_test_rate_limit(redis, channel.id)
     return await send_test_notification(
-        channel, config, email_provider=email_provider, webhook_sender=webhook_sender
+        channel,
+        config,
+        email_provider=email_provider,
+        webhook_sender=webhook_sender,
+        slack_sender=slack_sender,
     )
 
 
@@ -345,6 +375,15 @@ async def delete_channel(
         updated = _without_channel(monitor.notification_channel_ids, str(channel.id))
         if updated is not None:
             monitor.notification_channel_ids = updated
+    record(
+        session,
+        current,
+        organization_id=channel.organization_id,
+        action="notification_channel.deleted",
+        target_type="notification_channel",
+        target_id=channel.id,
+        details={"name": channel.name, "type": channel.channel_type},
+    )
     await session.delete(channel)
     await session.commit()
 

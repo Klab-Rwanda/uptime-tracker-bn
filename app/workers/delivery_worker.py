@@ -7,6 +7,7 @@ from app.services.email.base import EmailProvider
 from app.services.notifications.channel_sender import ChannelDeliverySender
 from app.services.notifications.dispatcher import process_due
 from app.services.notifications.sql_store import SqlDeliveryStore
+from app.services.slack import get_slack_sender
 from app.services.webhook import get_webhook_sender
 from app.util.database import engine, sessionLocal
 
@@ -30,6 +31,7 @@ def build_sender() -> ChannelDeliverySender:
         cipher=get_cipher(),
         email_provider=email,
         webhook_sender=get_webhook_sender(),
+        slack_sender=get_slack_sender(),
     )
 
 
