@@ -8,6 +8,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
 from sqlalchemy import select
 
 from app.api_keys.service import verify_api_key
+from app.auth.api_key_access import parse_scopes
 from app.auth.errors import APIError
 from app.auth.models import AuthSession, User
 from app.auth.security import decode_access_token
@@ -27,9 +28,16 @@ async def _authenticate_ws(
             api_key = await verify_api_key(session, token)
             if api_key is None or api_key.organization_id != organization_id:
                 raise ValueError("Invalid API key")
+            # Live updates show monitor statuses, like GET /v1/monitors
+            if "monitors:read" not in parse_scopes(api_key.scopes):
+                raise ValueError("API key lacks the monitors:read scope")
             user = await session.get(User, api_key.created_by_user_id)
             if user is None or not user.is_active:
                 raise ValueError("Inactive user")
+            # A key stops working once its creator leaves the organization
+            await _get_org_membership(
+                session, organization_id=organization_id, user_id=user.id
+            )
             return user
 
         # Check JWT token
