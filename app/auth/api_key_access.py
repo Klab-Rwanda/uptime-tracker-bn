@@ -21,6 +21,28 @@ if TYPE_CHECKING:
     from app.auth.dependencies import AuthenticatedUser
 
 
+# Every scope an endpoint checks. A key may only be given these, so a typo
+# ("monitor:read") is refused instead of silently granting nothing.
+KNOWN_SCOPES = frozenset(
+    {
+        "monitors:read",
+        "monitors:write",
+        "projects:read",
+        "projects:write",
+        "organizations:read",
+        "incidents:read",
+        "incidents:write",
+        "notification_channels:read",
+        "notification_channels:write",
+        "status_pages:read",
+        "status_pages:write",
+        "maintenance:read",
+        "maintenance:write",
+        "audit_logs:read",
+    }
+)
+
+
 @dataclass(frozen=True)
 class ApiKeyGrant:
     key_id: UUID
@@ -70,4 +92,15 @@ def require_scope(current: "AuthenticatedUser", scope: str) -> None:
             403,
             "insufficient_scope",
             f"This API key needs the '{scope}' scope",
+        )
+
+
+def forbid_api_key(current: "AuthenticatedUser") -> None:
+    """For actions only a person may take: managing API keys, members and
+    ownership. A key that could do these could give itself more power."""
+    if current.api_key is not None:
+        raise APIError(
+            403,
+            "api_key_not_allowed",
+            "This action needs a user login: API keys can't use it",
         )
