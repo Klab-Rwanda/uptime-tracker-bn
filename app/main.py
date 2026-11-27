@@ -9,6 +9,7 @@ from app.audit.router import router as audit_router
 from app.auth.errors import APIError
 from app.auth.router import router as auth_router
 from app.dashboard.router import router as dashboard_router
+from app.heartbeats.router import router as heartbeats_router
 from app.incidents.router import router as incidents_router
 from app.maintenance.router import router as maintenance_router
 from app.monitors.router import router as monitors_router
@@ -49,6 +50,7 @@ app.include_router(organizations_router)
 app.include_router(invitations_router)
 app.include_router(projects_router)
 app.include_router(monitors_router)
+app.include_router(heartbeats_router)
 app.include_router(incidents_router)
 app.include_router(maintenance_router)
 app.include_router(status_pages_router)
