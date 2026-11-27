@@ -18,6 +18,7 @@ from app.models.monitor import Monitor
 from app.notification_channels.crypto import ChannelCipher
 from app.notification_channels.dependencies import get_channel_cipher
 from app.status_pages import cache
+from app.status_pages.models import StatusPage
 from app.util.config import get_settings
 from app.util.database import get_db_session
 from app.util.redis import get_redis_client
@@ -187,10 +188,17 @@ async def set_monitor(world, key, *, status=None, active=None):
 # --- management -----------------------------------------------------------------------
 
 
+async def set_domain(world, page_id, domain):
+    """Pages made before domains were refused can still have one."""
+    async with world["sessions"]() as s:
+        (await s.get(StatusPage, UUID(page_id))).custom_domain = domain
+        await s.commit()
+
+
 async def test_create_page_with_groups(world):
-    page = await create_page(world, custom_domain="Status.Acme.COM")
+    page = await create_page(world)
     assert page["slug"] == f"acme-{world['tag']}"
-    assert page["custom_domain"] == "status.acme.com"
+    assert page["custom_domain"] is None
     assert page["url"] == f"https://app.example.test/status/acme-{world['tag']}"
     assert page["groups"] == [
         {"name": "Customer-facing services", "monitor_ids": [world["api"], world["web"]]},
@@ -213,9 +221,9 @@ async def test_viewer_cannot_create_and_outsider_cannot_use_the_org(world):
         {"slug": "ac me"},
         {"slug": "acme/../x"},
         {"slug": "api"},
-        {"custom_domain": "https://status.acme.com"},
-        {"custom_domain": "status.acme.com/path"},
-        {"custom_domain": "localhost"},
+        {"slug": "login"},
+        {"slug": "dashboard"},
+        {"slug": "a" * 64},
         {"title": "   "},
         {"groups": [{"name": "", "monitor_ids": []}]},
         {"extra": "field"},
@@ -245,15 +253,73 @@ async def test_monitors_of_another_organization_are_refused(world):
     assert resp.json()["error"]["code"] == "monitor_not_found"
 
 
-async def test_slug_and_domain_are_unique_across_organizations(world):
-    await create_page(world, custom_domain="status.acme.com")
-    client, theirs = world["client"], bearer(world["outsider"])
+async def test_slug_is_unique_across_organizations(world):
+    await create_page(world)
     base = {"organization_id": world["other_org"], "title": "Theirs", "groups": []}
-    taken_slug = await client.post("/v1/status-pages", json={**base, "slug": f"acme-{world['tag']}"}, headers=theirs)
-    taken_domain = await client.post(
-        "/v1/status-pages", json={**base, "slug": f"theirs-{world['tag']}", "custom_domain": "status.acme.com"}, headers=theirs
+    taken = await world["client"].post(
+        "/v1/status-pages", json={**base, "slug": f"acme-{world['tag']}"}, headers=bearer(world["outsider"])
     )
-    assert (taken_slug.status_code, taken_domain.status_code) == (409, 409)
+    assert taken.status_code == 409
+    assert taken.json()["error"]["message"] == "This slug is already taken"
+
+
+async def test_slugs_can_be_63_characters(world):
+    slug = ("acme-" + world["tag"] + "-" + "x" * 63)[:63]
+    page = await create_page(world, slug=slug)
+    assert page["slug"] == slug
+    assert (await world["client"].get(f"/status/{slug}")).status_code == 200
+
+
+@pytest.mark.parametrize("domain", ["status.acme.com", "Status.Victim.COM", "https://status.acme.com"])
+async def test_custom_domains_are_refused_until_ownership_can_be_checked(world, domain):
+    client, editor = world["client"], bearer(world["editor"])
+    created = await client.post("/v1/status-pages", json=page_body(world, custom_domain=domain), headers=editor)
+    assert created.status_code == 422
+    assert "DNS ownership check" in created.text
+
+    page = await create_page(world)
+    patched = await client.patch(f"/v1/status-pages/{page['id']}", json={"custom_domain": domain}, headers=editor)
+    assert patched.status_code == 422
+
+
+async def test_an_empty_custom_domain_means_none(world):
+    page = await create_page(world, custom_domain="  ")
+    assert page["custom_domain"] is None
+
+
+async def test_group_names_must_be_unique_on_a_page(world):
+    client, editor = world["client"], bearer(world["editor"])
+    groups = [{"name": "API", "monitor_ids": [world["api"]]}, {"name": "api", "monitor_ids": [world["web"]]}]
+    created = await client.post("/v1/status-pages", json=page_body(world, groups=groups), headers=editor)
+    assert created.status_code == 422
+
+    page = await create_page(world)
+    patched = await client.patch(f"/v1/status-pages/{page['id']}", json={"groups": groups}, headers=editor)
+    assert patched.status_code == 422
+
+
+async def test_two_pages_may_use_the_same_group_name(world):
+    await create_page(world)
+    other = await world["client"].post(
+        "/v1/status-pages",
+        json=page_body(world, slug=f"acme-two-{world['tag']}", groups=[{"name": "Internal", "monitor_ids": []}]),
+        headers=bearer(world["editor"]),
+    )
+    assert other.status_code == 201
+
+
+async def test_a_page_with_an_old_64_character_slug_stays_reachable(world):
+    page = await create_page(world)
+    old_slug = "b" * 64
+    async with world["sessions"]() as s:
+        (await s.get(StatusPage, UUID(page["id"]))).slug = old_slug
+        await s.commit()
+    assert (await world["client"].get(f"/status/{old_slug}")).status_code == 200
+    # Changing other fields keeps working; only a new slug must follow the new rule
+    renamed = await world["client"].patch(
+        f"/v1/status-pages/{page['id']}", json={"title": "Renamed"}, headers=bearer(world["editor"])
+    )
+    assert renamed.status_code == 200
 
 
 async def test_members_list_and_get_and_outsiders_see_nothing(world):
@@ -276,7 +342,8 @@ async def test_members_list_and_get_and_outsiders_see_nothing(world):
 
 
 async def test_update_title_slug_domain_and_replace_groups(world):
-    page = await create_page(world, custom_domain="status.acme.com")
+    page = await create_page(world)
+    await set_domain(world, page["id"], "status.acme.com")
     new_slug = f"acme-new-{world['tag']}"
     resp = await world["client"].patch(
         f"/v1/status-pages/{page['id']}",
@@ -295,7 +362,8 @@ async def test_update_title_slug_domain_and_replace_groups(world):
 
 
 async def test_update_keeps_what_was_not_sent(world):
-    page = await create_page(world, custom_domain="status.acme.com")
+    page = await create_page(world)
+    await set_domain(world, page["id"], "status.acme.com")
     resp = await world["client"].patch(
         f"/v1/status-pages/{page['id']}", json={"title": "Renamed"}, headers=bearer(world["editor"])
     )
