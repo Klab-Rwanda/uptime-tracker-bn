@@ -1,9 +1,10 @@
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.service import record
 from app.auth.api_key_access import require_scope
 from app.auth.dependencies import AuthenticatedUser
 from app.auth.errors import APIError
@@ -144,6 +145,7 @@ async def create_window(
     await _check_monitors(session, data.organization_id, data.monitor_ids)
 
     window = MaintenanceWindow(
+        id=uuid4(),
         organization_id=data.organization_id,
         name=data.name,
         starts_at=starts_at,
@@ -153,6 +155,19 @@ async def create_window(
         monitors=[MaintenanceWindowMonitor(monitor_id=m) for m in data.monitor_ids],
     )
     session.add(window)
+    record(
+        session,
+        current,
+        organization_id=window.organization_id,
+        action="maintenance_window.created",
+        target_type="maintenance_window",
+        target_id=window.id,
+        details={
+            "name": window.name,
+            "starts_at": starts_at.isoformat(),
+            "ends_at": ends_at.isoformat(),
+        },
+    )
     await session.commit()
     await session.refresh(window)
     return to_response(window, now)
@@ -225,6 +240,15 @@ async def update_window(
     if data.suppress_notifications is not None:
         window.suppress_notifications = data.suppress_notifications
     window.updated_at = now
+    record(
+        session,
+        current,
+        organization_id=window.organization_id,
+        action="maintenance_window.updated",
+        target_type="maintenance_window",
+        target_id=window.id,
+        details={"fields": sorted(data.model_fields_set)},
+    )
     await session.commit()
     await session.refresh(window)
     return to_response(window, now)
@@ -239,6 +263,15 @@ async def delete_window(
         current,
         roles=ADMIN_ROLES,
         message="An owner or administrator role is required to delete maintenance",
+    )
+    record(
+        session,
+        current,
+        organization_id=window.organization_id,
+        action="maintenance_window.deleted",
+        target_type="maintenance_window",
+        target_id=window.id,
+        details={"name": window.name},
     )
     await session.delete(window)
     await session.commit()

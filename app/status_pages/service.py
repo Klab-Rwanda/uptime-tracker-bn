@@ -1,12 +1,13 @@
 import re
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.service import record
 from app.auth.api_key_access import require_scope
 from app.auth.dependencies import AuthenticatedUser
 from app.auth.errors import APIError
@@ -193,12 +194,22 @@ async def create_page(
     await _check_slug_free(session, data.slug, exclude=None)
 
     page = StatusPage(
+        id=uuid4(),
         organization_id=data.organization_id,
         title=data.title,
         slug=data.slug,
         groups=_build_groups(data.groups),
     )
     session.add(page)
+    record(
+        session,
+        current,
+        organization_id=page.organization_id,
+        action="status_page.created",
+        target_type="status_page",
+        target_id=page.id,
+        details={"title": page.title, "slug": page.slug},
+    )
     page = await _commit(session, page)
     await cache.forget(redis, page.slug)  # the slug may be cached as "not found"
     return page
@@ -260,6 +271,15 @@ async def update_page(
         page.groups.clear()
         await session.flush()
         page.groups.extend(_build_groups(data.groups))
+    record(
+        session,
+        current,
+        organization_id=page.organization_id,
+        action="status_page.updated",
+        target_type="status_page",
+        target_id=page.id,
+        details={"fields": sorted(sent)},
+    )
     page = await _commit(session, page)
     await cache.forget(redis, old_slug, page.slug)
     return page
@@ -276,6 +296,15 @@ async def delete_page(
         message="An owner or administrator role is required to delete a status page",
     )
     slug = page.slug
+    record(
+        session,
+        current,
+        organization_id=page.organization_id,
+        action="status_page.deleted",
+        target_type="status_page",
+        target_id=page.id,
+        details={"title": page.title, "slug": page.slug},
+    )
     await session.delete(page)
     await session.commit()
     await cache.forget(redis, slug)
