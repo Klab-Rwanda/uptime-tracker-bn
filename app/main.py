@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.api_keys.router import router as api_keys_router
+from app.audit.router import router as audit_router
 from app.auth.errors import APIError
 from app.auth.router import router as auth_router
 from app.dashboard.router import router as dashboard_router
@@ -54,6 +55,7 @@ app.include_router(status_pages_router)
 app.include_router(public_status_router)
 app.include_router(notification_channels_router)
 app.include_router(api_keys_router)
+app.include_router(audit_router)
 app.include_router(dashboard_router)
 app.include_router(ws_router)
 app.include_router(health.router)
