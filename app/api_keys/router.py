@@ -11,13 +11,13 @@ from app.api_keys.schemas import (
     ApiKeyCreatedResponse,
     ApiKeyListEnvelope,
 )
-from app.auth.dependencies import AuthenticatedUser, get_current_auth
+from app.auth.dependencies import AuthenticatedUser, get_user_login
 from app.util.database import get_db_session
 
 router = APIRouter(prefix="/v1/api-keys", tags=["api-keys"])
 
 DatabaseSession = Annotated[AsyncSession, Depends(get_db_session)]
-CurrentAuth = Annotated[AuthenticatedUser, Depends(get_current_auth)]
+UserLogin = Annotated[AuthenticatedUser, Depends(get_user_login)]
 
 
 @router.post(
@@ -27,7 +27,7 @@ CurrentAuth = Annotated[AuthenticatedUser, Depends(get_current_auth)]
 )
 async def create_api_key(
     request: ApiKeyCreate,
-    current: CurrentAuth,
+    current: UserLogin,
     session: DatabaseSession,
 ) -> ApiKeyCreatedEnvelope:
     api_key, raw_token = await service.create_api_key(
@@ -51,7 +51,7 @@ async def create_api_key(
 @router.get("", response_model=ApiKeyListEnvelope)
 async def list_api_keys(
     organization_id: Annotated[UUID, Query(description="Organization ID to filter API keys")],
-    current: CurrentAuth,
+    current: UserLogin,
     session: DatabaseSession,
 ) -> ApiKeyListEnvelope:
     keys = await service.list_api_keys(
@@ -67,7 +67,7 @@ async def list_api_keys(
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_api_key(
     id: UUID,
-    current: CurrentAuth,
+    current: UserLogin,
     session: DatabaseSession,
 ) -> Response:
     await service.revoke_api_key(

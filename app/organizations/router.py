@@ -4,7 +4,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import AuthenticatedUser, get_current_auth
+from app.auth.dependencies import (
+    AuthenticatedUser,
+    get_user_login,
+    scoped,
+)
 from app.organizations import service
 from app.organizations.models import (
     Organization,
@@ -35,7 +39,8 @@ router = APIRouter(prefix="/v1/organizations", tags=["organizations"])
 invitations_router = APIRouter(prefix="/v1/invitations", tags=["invitations"])
 
 DatabaseSession = Annotated[AsyncSession, Depends(get_db_session)]
-CurrentAuth = Annotated[AuthenticatedUser, Depends(get_current_auth)]
+OrganizationsRead = Annotated[AuthenticatedUser, Depends(scoped("organizations:read"))]
+UserLogin = Annotated[AuthenticatedUser, Depends(get_user_login)]
 
 
 @invitations_router.post(
@@ -44,7 +49,7 @@ CurrentAuth = Annotated[AuthenticatedUser, Depends(get_current_auth)]
 )
 async def accept_invitation_direct(
     request: AcceptInvitationRequest,
-    current: CurrentAuth,
+    current: UserLogin,
     session: DatabaseSession,
 ) -> AcceptInvitationEnvelope:
     organization, role = await service.accept_invitation(
@@ -97,7 +102,7 @@ def _invitation_response(
 )
 async def create_organization(
     request: OrganizationCreate,
-    current: CurrentAuth,
+    current: UserLogin,
     session: DatabaseSession,
 ) -> OrganizationEnvelope:
     organization, membership = await service.create_organization(
@@ -113,10 +118,17 @@ async def create_organization(
 
 @router.get("", response_model=OrganizationListEnvelope)
 async def list_organizations(
-    current: CurrentAuth,
+    current: OrganizationsRead,
     session: DatabaseSession,
 ) -> OrganizationListEnvelope:
     org_pairs = await service.list_organizations(session, current.user.id)
+    if current.api_key is not None:
+        # The key's creator may belong to other organizations: never list them
+        org_pairs = [
+            (org, membership)
+            for org, membership in org_pairs
+            if org.id == current.api_key.organization_id
+        ]
     return OrganizationListEnvelope(
         data=[
             _organization_response(org, membership)
@@ -131,7 +143,7 @@ async def list_organizations(
 )
 async def accept_invitation(
     request: AcceptInvitationRequest,
-    current: CurrentAuth,
+    current: UserLogin,
     session: DatabaseSession,
 ) -> AcceptInvitationEnvelope:
     organization, role = await service.accept_invitation(
@@ -154,7 +166,7 @@ async def accept_invitation(
 )
 async def get_organization(
     organization_id: UUID,
-    current: CurrentAuth,
+    current: OrganizationsRead,
     session: DatabaseSession,
 ) -> OrganizationEnvelope:
     organization, membership = await service.get_organization(
@@ -174,7 +186,7 @@ async def get_organization(
 async def update_organization(
     organization_id: UUID,
     request: OrganizationUpdate,
-    current: CurrentAuth,
+    current: UserLogin,
     session: DatabaseSession,
 ) -> OrganizationEnvelope:
     organization, membership = await service.update_organization(
@@ -195,7 +207,7 @@ async def update_organization(
 async def transfer_ownership(
     organization_id: UUID,
     request: TransferOwnershipRequest,
-    current: CurrentAuth,
+    current: UserLogin,
     session: DatabaseSession,
 ) -> MessageEnvelope:
     await service.transfer_ownership(
@@ -213,7 +225,7 @@ async def transfer_ownership(
 )
 async def list_members(
     organization_id: UUID,
-    current: CurrentAuth,
+    current: OrganizationsRead,
     session: DatabaseSession,
 ) -> MemberListEnvelope:
     members = await service.list_members(
@@ -234,7 +246,7 @@ async def list_members(
 async def invite_member(
     organization_id: UUID,
     request: InvitationCreate,
-    current: CurrentAuth,
+    current: UserLogin,
     session: DatabaseSession,
 ) -> InvitationEnvelope:
     invitation, invitation_status = await service.create_invitation(
@@ -255,7 +267,7 @@ async def invite_member(
 )
 async def leave_organization(
     organization_id: UUID,
-    current: CurrentAuth,
+    current: UserLogin,
     session: DatabaseSession,
 ) -> Response:
     await service.leave_organization(
@@ -273,7 +285,7 @@ async def leave_organization(
 async def remove_member(
     organization_id: UUID,
     member_user_id: UUID,
-    current: CurrentAuth,
+    current: UserLogin,
     session: DatabaseSession,
 ) -> Response:
     await service.remove_member(
@@ -293,7 +305,7 @@ async def remove_member(
 async def create_invitation(
     organization_id: UUID,
     request: InvitationCreate,
-    current: CurrentAuth,
+    current: UserLogin,
     session: DatabaseSession,
 ) -> InvitationEnvelope:
     invitation, invitation_status = await service.create_invitation(
@@ -314,7 +326,7 @@ async def create_invitation(
 )
 async def list_invitations(
     organization_id: UUID,
-    current: CurrentAuth,
+    current: UserLogin,
     session: DatabaseSession,
 ) -> InvitationListEnvelope:
     invitations = await service.list_invitations(
@@ -336,7 +348,7 @@ async def list_invitations(
 async def revoke_invitation(
     organization_id: UUID,
     invitation_id: UUID,
-    current: CurrentAuth,
+    current: UserLogin,
     session: DatabaseSession,
 ) -> Response:
     await service.revoke_invitation(
