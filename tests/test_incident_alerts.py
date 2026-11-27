@@ -29,6 +29,7 @@ from app.services.notifications.channel_sender import ChannelDeliverySender
 from app.services.notifications.dispatcher import AttemptOutcome, process_due
 from app.services.notifications.retry import PermanentDeliveryError
 from app.services.notifications.sql_store import SqlDeliveryStore
+from app.services.slack.fake import InMemorySlackSender
 from app.services.webhook.fake import InMemoryWebhookSender
 from app.workers.check_worker import run_due_monitors
 from tests.conftest import dispose_test_engine, make_test_engine
@@ -114,7 +115,8 @@ async def open_now(sessions, world):
 
 
 async def queued(store) -> list:
-    return await store.list_due(now=T0 + timedelta(days=1), limit=100)
+    # Far ahead: some alerts are stamped with the real clock, not T0
+    return await store.list_due(now=datetime.now(UTC) + timedelta(days=365), limit=100)
 
 
 # --- queueing alerts ---------------------------------------------------------------------
@@ -439,3 +441,38 @@ async def test_worker_sends_nothing_for_an_outage_during_maintenance(sessions, s
     for _ in range(4):
         await run_check(sessions, store, world, checks)
     assert await queued(store) == []
+
+
+
+# --- Slack alerts ---------------------------------------------------------------------------
+
+
+async def test_alerts_reach_a_slack_channel(sessions, store, world):
+    slack_url = "https://hooks.slack.com/services/T0001/B0002/abcdefSECRET123"
+    async with sessions() as s:
+        channel = NotificationChannel(
+            organization_id=world["org_a"],
+            name="On-call Slack",
+            channel_type="slack",
+            config_encrypted=CIPHER.encrypt({"webhook_url": slack_url}),
+        )
+        s.add(channel)
+        await s.flush()
+        (await s.get(Monitor, world["monitor"])).notification_channel_ids = json.dumps([str(channel.id)])
+        await s.commit()
+
+    incident = await open_now(sessions, world)
+    async with sessions() as s:
+        await enqueue_incident_alerts(s, store, incident, AlertEvent.OPENED, now=T0)
+        resolved = await resolve_incident(s, incident.id, resolved_at=T0 + timedelta(minutes=7))
+        await enqueue_incident_alerts(s, store, resolved, AlertEvent.RESOLVED, now=T0 + timedelta(minutes=7))
+
+    slack = InMemorySlackSender()
+    sender = ChannelDeliverySender(sessions, cipher=CIPHER, slack_sender=slack)
+    await process_due(store, sender, clock=lambda: T0 + timedelta(minutes=8))
+
+    # Due alerts are sent concurrently, so compare without order
+    by_text = {message["text"]: message for _, message in slack.sent}
+    assert set(by_text) == {"🔴 Customer API is down", "🟢 Customer API is back up"}
+    assert {url for url, _ in slack.sent} == {slack_url}
+    assert "7m" in json.dumps(by_text["🟢 Customer API is back up"])

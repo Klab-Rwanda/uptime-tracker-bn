@@ -4,11 +4,18 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,62}[a-z0-9])$")
-# Slugs that would be confusing or clash with our own paths
-RESERVED_SLUGS = frozenset({"admin", "api", "app", "status", "www", "health", "metrics", "v1"})
-_LABEL = r"(?!-)[a-z0-9-]{1,63}(?<!-)"
-DOMAIN_RE = re.compile(rf"^(?:{_LABEL}\.)+[a-z]{{2,63}}$")
+# 3 to 63 characters: 63 is the limit for one part of a host name, so a slug
+# can later become <slug>.status.example.com
+SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$")
+# Slugs that would be confusing, look official, or clash with our own paths
+RESERVED_SLUGS = frozenset(
+    {
+        "about", "account", "admin", "api", "app", "assets", "auth", "billing",
+        "blog", "dashboard", "docs", "help", "health", "login", "logout", "mail",
+        "metrics", "register", "root", "settings", "signup", "static", "status",
+        "support", "system", "v1", "v2", "www",
+    }
+)  # fmt: skip
 MAX_GROUPS = 20
 MAX_MONITORS = 100
 
@@ -17,7 +24,7 @@ def clean_slug(value: str) -> str:
     slug = value.strip().lower()
     if not SLUG_RE.fullmatch(slug):
         raise ValueError(
-            "slug must be 3-64 characters: lowercase letters, digits and hyphens, "
+            "slug must be 3-63 characters: lowercase letters, digits and hyphens, "
             "not starting or ending with a hyphen"
         )
     if slug in RESERVED_SLUGS:
@@ -25,15 +32,13 @@ def clean_slug(value: str) -> str:
     return slug
 
 
-def clean_domain(value: str | None) -> str | None:
-    if value is None:
-        return None
-    domain = value.strip().lower().rstrip(".")
-    if not domain:
-        return None
-    if len(domain) > 253 or not DOMAIN_RE.fullmatch(domain):
-        raise ValueError("custom_domain must be a host name like status.example.com")
-    return domain
+def refuse_custom_domain(value: str | None) -> None:
+    """Custom domains need proof of ownership (a DNS check) first. Without it,
+    anyone could claim status.<someone-else>.com and block the real owner."""
+    if value is not None and value.strip():
+        raise ValueError(
+            "Custom domains are not available yet: they need a DNS ownership check first"
+        )
 
 
 def _clean_text(value: str, field: str) -> str:
@@ -65,6 +70,9 @@ def _check_groups(groups: list[GroupIn] | None) -> None:
         raise ValueError(f"A status page can show at most {MAX_MONITORS} monitors")
     if len(set(monitor_ids)) != len(monitor_ids):
         raise ValueError("A monitor can appear only once on a status page")
+    names = [g.name.casefold() for g in groups]
+    if len(set(names)) != len(names):
+        raise ValueError("Group names must be unique on a page (ignoring case)")
 
 
 class StatusPageCreate(BaseModel):
@@ -88,8 +96,8 @@ class StatusPageCreate(BaseModel):
 
     @field_validator("custom_domain")
     @classmethod
-    def check_domain(cls, value: str | None) -> str | None:
-        return clean_domain(value)
+    def check_domain(cls, value: str | None) -> None:
+        refuse_custom_domain(value)
 
     @model_validator(mode="after")
     def check_groups(self) -> "StatusPageCreate":
@@ -98,8 +106,8 @@ class StatusPageCreate(BaseModel):
 
 
 class StatusPageUpdate(BaseModel):
-    """Only the fields that are sent change. Send "custom_domain": null to remove
-    the domain, and "groups" to replace all groups."""
+    """Only the fields that are sent change. "groups" replaces all groups.
+    "custom_domain": null removes a domain set before domains were refused."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -120,8 +128,8 @@ class StatusPageUpdate(BaseModel):
 
     @field_validator("custom_domain")
     @classmethod
-    def check_domain(cls, value: str | None) -> str | None:
-        return clean_domain(value)
+    def check_domain(cls, value: str | None) -> None:
+        refuse_custom_domain(value)
 
     @model_validator(mode="after")
     def check(self) -> "StatusPageUpdate":

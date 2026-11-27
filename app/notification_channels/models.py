@@ -20,7 +20,7 @@ class NotificationChannel(Base):
     __tablename__ = "notification_channels"
     __table_args__ = (
         CheckConstraint(
-            "channel_type IN ('webhook', 'email')",
+            "channel_type IN ('webhook', 'email', 'slack')",
             name="notification_channels_type_valid",
         ),
         UniqueConstraint(

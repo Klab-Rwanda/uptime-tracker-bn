@@ -19,6 +19,8 @@ from app.notification_channels.models import NotificationChannel
 from app.services.email.base import EmailMessage, EmailProvider
 from app.services.email.templates import render_channel_test
 from app.services.notifications.retry import PermanentDeliveryError, classify_failure
+from app.services.slack.messages import channel_test_message
+from app.services.slack.sender import SlackSender
 from app.services.webhook.base import WebhookEvent, WebhookSender
 
 logger = logging.getLogger(__name__)
@@ -71,13 +73,14 @@ async def send_test_notification(
     *,
     email_provider: EmailProvider | None,
     webhook_sender: WebhookSender | None,
+    slack_sender: SlackSender | None = None,
     now: datetime | None = None,
 ) -> ChannelTestResult:
     """Send one test message (one attempt, no retries) and report the outcome."""
     sent_at = now or datetime.now(UTC)
     try:
         message_id = await asyncio.wait_for(
-            _send(channel, config, email_provider, webhook_sender, sent_at),
+            _send(channel, config, email_provider, webhook_sender, slack_sender, sent_at),
             timeout=TEST_TIMEOUT_SECONDS,
         )
     # The outcome is the answer, whatever went wrong; classify_failure keeps
@@ -98,6 +101,7 @@ async def _send(
     config: dict[str, Any],
     email_provider: EmailProvider | None,
     webhook_sender: WebhookSender | None,
+    slack_sender: SlackSender | None,
     sent_at: datetime,
 ) -> str | None:
     key = f"test:{channel.id}:{uuid4().hex}"  # every test is a new message
@@ -141,5 +145,14 @@ async def _send(
             ),
         )
         return f"http-{response.status_code}"
+
+    if channel.channel_type == "slack":
+        if slack_sender is None:
+            raise PermanentDeliveryError("Slack delivery is not configured")
+        slack_url = config.get("webhook_url")
+        if not isinstance(slack_url, str) or not slack_url:
+            raise PermanentDeliveryError("Notification channel configuration can't be read")
+        status = await slack_sender.send(slack_url, channel_test_message(channel.name, sent_at))
+        return f"slack-{status}"
 
     raise PermanentDeliveryError("Unsupported notification channel type")
