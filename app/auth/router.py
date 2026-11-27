@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Request, status
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import AuthenticatedUser, get_current_auth
+from app.auth.dependencies import AuthenticatedUser, get_current_auth, get_user_login
 from app.auth.models import User
 from app.auth.rate_limit import enforce_login_rate_limit
 from app.auth.schemas import (
@@ -35,6 +35,7 @@ from app.util.redis import get_redis_client
 router = APIRouter(prefix="/v1/auth", tags=["authentication"])
 DatabaseSession = Annotated[AsyncSession, Depends(get_db_session)]
 CurrentAuth = Annotated[AuthenticatedUser, Depends(get_current_auth)]
+UserLogin = Annotated[AuthenticatedUser, Depends(get_user_login)]
 
 
 @router.post(
@@ -144,7 +145,7 @@ async def refresh_endpoint(
 
 @router.post("/logout", response_model=dict[str, dict[str, str]])
 async def logout_endpoint(
-    current: CurrentAuth,
+    current: UserLogin,
     session: DatabaseSession,
 ) -> dict[str, dict[str, str]]:
     await logout(session, current.session_id)

@@ -1,4 +1,5 @@
 import hashlib
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated
@@ -11,7 +12,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api_keys.models import ApiKey
-from app.auth.api_key_access import ApiKeyGrant, parse_scopes, set_current_grant
+from app.auth.api_key_access import (
+    ApiKeyGrant,
+    forbid_api_key,
+    parse_scopes,
+    require_scope,
+    set_current_grant,
+)
 from app.auth.errors import APIError
 from app.auth.models import AuthSession, User
 from app.auth.security import decode_access_token
@@ -120,3 +127,25 @@ async def get_current_auth(
             headers={"WWW-Authenticate": "Bearer"},
         )
     return AuthenticatedUser(user=user, session_id=auth_session_id)
+
+
+CurrentAuth = Annotated[AuthenticatedUser, Depends(get_current_auth)]
+
+
+def scoped(scope: str) -> Callable[..., Awaitable[AuthenticatedUser]]:
+    """Dependency: the current login, where an API key also needs `scope`.
+
+        current: Annotated[AuthenticatedUser, Depends(scoped("monitors:read"))]
+    """
+
+    async def dependency(current: CurrentAuth) -> AuthenticatedUser:
+        require_scope(current, scope)
+        return current
+
+    return dependency
+
+
+async def get_user_login(current: CurrentAuth) -> AuthenticatedUser:
+    """Dependency: a person's login only; API keys get 403."""
+    forbid_api_key(current)
+    return current

@@ -464,7 +464,11 @@ async def test_api_key_cannot_reach_its_creators_other_organizations(client, org
     # The owner of org A also owns org C; a key made for A must not open C
     second_org = await create_org(client, org["owner"], "second-org")
     key_for_a = await make_api_key(
-        client, org["org_id"], org["owner"], ["monitors:read", "notification_channels:read"]
+        client,
+        org["org_id"],
+        org["owner"],
+        # Every read scope, so the organization check is what stops it
+        ["monitors:read", "notification_channels:read", "organizations:read"],
     )
 
     for url in (

@@ -2,18 +2,18 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from app.auth.dependencies import AuthenticatedUser, get_current_auth
+from app.auth.dependencies import AuthenticatedUser, scoped
 from app.checks.http_check import HTTPCheck
 from app.schemas.check import RunCheckRequest, RunCheckResponse
 from app.util.config import get_settings
 
 router = APIRouter(prefix="/checks", tags=["checks"])
 
-CurrentAuth = Annotated[AuthenticatedUser, Depends(get_current_auth)]
+MonitorsWrite = Annotated[AuthenticatedUser, Depends(scoped("monitors:write"))]
 
 
 @router.post("/run", response_model=RunCheckResponse)
-async def run_check(body: RunCheckRequest, current: CurrentAuth) -> RunCheckResponse:
+async def run_check(body: RunCheckRequest, current: MonitorsWrite) -> RunCheckResponse:
     """Run one ad-hoc HTTP check.
 
     Requires a logged-in user, and the target gets the same SSRF protection as
