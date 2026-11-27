@@ -478,3 +478,70 @@ async def test_api_key_cannot_reach_its_creators_other_organizations(client, org
     # Its own organization still works, and so does the owner's normal login
     assert (await client.get(f"/v1/monitors?organization_id={org['org_id']}", headers=key_for_a)).status_code == 200
     assert (await client.get(f"/v1/organizations/{second_org}", headers=bearer(org["owner"]))).status_code == 200
+
+
+# --- Slack channels -------------------------------------------------------------------
+
+SLACK_URL = "https://hooks.slack.com/services/T0001/B0002/abcdefSECRET123"
+
+
+def slack_body(org_id: str, url: str = SLACK_URL, name: str = "On-call Slack") -> dict:
+    return {"organization_id": org_id, "name": name, "type": "slack", "config": {"webhook_url": url}}
+
+
+async def test_create_slack_channel_never_shows_the_url(client, org, sessions):
+    data = await create_channel(client, org, slack_body(org["org_id"]))
+    assert data["type"] == "slack"
+    assert data["config_summary"] == {"url_host": "hooks.slack.com"}
+    assert data.get("signing_secret") is None  # Slack URLs carry their own secret
+
+    listed = await client.get(f"/v1/notification-channels?organization_id={org['org_id']}", headers=bearer(org["viewer"]))
+    assert "abcdefSECRET123" not in listed.text
+    stored = await stored_config(sessions, data["id"])
+    assert stored["config"] == {"webhook_url": SLACK_URL}  # kept, but only encrypted
+    assert "abcdefSECRET123" not in stored["raw"]
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"webhook_url": "https://example.com/hook"},
+        {"webhook_url": "https://hooks.slack.com.evil.com/services/T0001/B0002/abc"},
+        {"webhook_url": "http://hooks.slack.com/services/T0001/B0002/abc"},
+        {"webhook_url": "http://127.0.0.1/services/T0001/B0002/abc"},
+        {"webhook_url": SLACK_URL, "secret": "x"},
+        {},
+    ],
+)
+async def test_only_slack_webhook_urls_are_accepted(client, org, config):
+    body = {**slack_body(org["org_id"]), "config": config}
+    resp = await client.post("/v1/notification-channels", json=body, headers=bearer(org["editor"]))
+    assert resp.status_code == 422
+    assert "evil" not in resp.text
+
+
+async def test_change_the_slack_url(client, org, sessions):
+    channel = await create_channel(client, org, slack_body(org["org_id"]))
+    new_url = "https://hooks.slack.com/services/T0001/B0003/newSECRET456"
+    resp = await client.patch(
+        f"/v1/notification-channels/{channel['id']}",
+        json={"config": {"webhook_url": new_url}},
+        headers=bearer(org["editor"]),
+    )
+    assert resp.status_code == 200, resp.text
+    assert (await stored_config(sessions, channel["id"]))["config"] == {"webhook_url": new_url}
+
+    bad = await client.patch(
+        f"/v1/notification-channels/{channel['id']}",
+        json={"config": {"webhook_url": "https://example.com/x"}},
+        headers=bearer(org["editor"]),
+    )
+    assert bad.status_code == 422
+
+
+async def test_slack_channels_have_no_secret_to_rotate(client, org):
+    channel = await create_channel(client, org, slack_body(org["org_id"]))
+    resp = await client.patch(
+        f"/v1/notification-channels/{channel['id']}", json={"rotate_secret": True}, headers=bearer(org["editor"])
+    )
+    assert resp.status_code == 422

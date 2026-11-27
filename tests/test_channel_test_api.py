@@ -15,9 +15,12 @@ from app.notification_channels.crypto import ChannelCipher
 from app.notification_channels.dependencies import (
     get_channel_cipher,
     get_test_email_provider,
+    get_test_slack_sender,
     get_test_webhook_sender,
 )
 from app.services.email.fake import InMemoryEmailProvider
+from app.services.slack.fake import InMemorySlackSender
+from app.services.slack.sender import PermanentSlackError
 from app.services.webhook.base import RetryableWebhookError
 from app.services.webhook.fake import InMemoryWebhookSender
 from app.util.config import get_settings
@@ -28,6 +31,8 @@ from tests.conftest import dispose_test_engine, make_test_engine
 sent_emails: list[tuple[str, str, dict[str, str]]] = []
 CIPHER = ChannelCipher([Fernet.generate_key().decode()])
 WEBHOOK_URL = "https://hooks.acme.com/services/T0/secret-token-123"
+
+SLACK_URL = "https://hooks.slack.com/services/T0001/B0002/abcdefSECRET123"
 
 
 class CountingRedis:
@@ -70,8 +75,10 @@ async def env(request, tmp_path, monkeypatch) -> AsyncIterator[dict]:
     app.dependency_overrides[get_channel_cipher] = lambda: CIPHER
     app.dependency_overrides[get_test_email_provider] = lambda: email
     app.dependency_overrides[get_test_webhook_sender] = lambda: webhook
+    slack = InMemorySlackSender()
+    app.dependency_overrides[get_test_slack_sender] = lambda: slack
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        yield {"client": client, "redis": redis, "email": email, "webhook": webhook}
+        yield {"client": client, "redis": redis, "email": email, "webhook": webhook, "slack": slack}
     app.dependency_overrides.clear()
     await dispose_test_engine(engine)
     get_settings.cache_clear()
@@ -132,6 +139,7 @@ async def world(env) -> dict:
         "outsider": outsider,
         "email_channel": await channel("email", {"recipients": ["oncall@acme.com", "ops@acme.com"]}),
         "webhook_channel": await channel("webhook", {"webhook_url": WEBHOOK_URL}),
+        "slack_channel": await channel("slack", {"webhook_url": SLACK_URL}),
     }
 
 
@@ -282,3 +290,22 @@ async def test_api_keys_need_the_write_scope(world):
     assert denied.status_code == 403
     allowed = await run_test(world, "email_channel", headers=await key(["notification_channels:write"]))
     assert allowed.status_code == 200
+
+
+# --- Slack ------------------------------------------------------------------------------
+
+
+async def test_slack_channel_test_is_sent(world):
+    resp = await run_test(world, "slack_channel")
+    data = resp.json()["data"]
+    assert (data["status"], data["provider_message_id"]) == ("sent", "slack-200")
+    url, message = world["slack"].sent[0]
+    assert url == SLACK_URL
+    assert "slack channel" in str(message)
+
+
+async def test_a_removed_slack_webhook_is_reported_safely(world):
+    world["slack"].fail_with = PermanentSlackError("Slack rejected the message: 404 (no_service)")
+    data = (await run_test(world, "slack_channel")).json()["data"]
+    assert (data["status"], data["detail"]) == ("failed", "Slack rejected the message: 404 (no_service)")
+    assert "abcdefSECRET123" not in str(data)
