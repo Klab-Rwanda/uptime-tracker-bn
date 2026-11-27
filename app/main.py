@@ -19,6 +19,7 @@ from app.routes import health
 from app.routes.checks import router as checks_router
 from app.status_pages.router import public_router as public_status_router
 from app.status_pages.router import router as status_pages_router
+from app.util.cors import register_cors
 from app.util.database import dispose_engine
 from app.util.errors import register_error_handlers
 from app.util.logs import register_logging
@@ -40,6 +41,8 @@ app = FastAPI(title="PulseMonitor API", version="0.1.0", lifespan=lifespan)
 register_logging(app)
 register_metrics(app)
 register_error_handlers(app)
+# Last, so it wraps the other middleware: 401/404/422 answers carry the CORS headers too
+register_cors(app)
 app.include_router(auth_router)
 app.include_router(organizations_router)
 app.include_router(invitations_router)
